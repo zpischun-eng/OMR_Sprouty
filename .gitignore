@@ -1,0 +1,33 @@
+# 파이썬
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 빌드 결과물 (GitHub Actions가 만든다)
+build/
+dist/
+Output/
+*.spec.bak
+
+# Audiveris·글자 인식 데이터 — 저장소에 넣지 않는다(빌드할 때 공식 배포판을 받아 넣음)
+/audiveris/
+/resource_dist/tessdata/
+
+# 개발용 시험 악보 — 저작권이 있는 실제 곡은 각자 PC에만 둔다
+# (저장소에는 직접 만든 합성 악보 resource/synthetic, resource/demo_song.png만 올린다)
+/resource/*.jpg
+/resource/*.jpeg
+/resource/*.pdf
+/resource/test_multipage/
+/tests/
+
+# 인식 결과·편집 파일
+*.sprouty
+*_진단.zip
+/*.omr
+/*.mxl
+
+# 기타
+.DS_Store
+Thumbs.db

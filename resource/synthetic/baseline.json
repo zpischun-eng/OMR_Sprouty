@@ -1,0 +1,30 @@
+{
+ "syn01_c44_basic": {
+  "sym_acc": 0.84375,
+  "pitch_acc": 0.8627450980392157
+ },
+ "syn02_g34_dotted": {
+  "sym_acc": 0.6716417910447762,
+  "pitch_acc": 0.8135593220338984
+ },
+ "syn03_f44_anacrusis": {
+  "sym_acc": 0.8773584905660378,
+  "pitch_acc": 0.99
+ },
+ "syn04_d24_sixteenth": {
+  "sym_acc": 0.8095238095238095,
+  "pitch_acc": 0.8421052631578947
+ },
+ "syn05_c44_long_dense": {
+  "sym_acc": 0.8975903614457831,
+  "pitch_acc": 0.9483870967741935
+ },
+ "syn06_bb44_bravura": {
+  "sym_acc": 0.84375,
+  "pitch_acc": 0.9347826086956522
+ },
+ "syn07_g44_multipage": {
+  "sym_acc": 0.9012016021361816,
+  "pitch_acc": 0.9681620839363242
+ }
+}

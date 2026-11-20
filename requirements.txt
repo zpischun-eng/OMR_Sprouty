@@ -1,0 +1,20 @@
+opencv-python>=4.5
+numpy>=1.20
+pillow>=8.0
+PySide6>=6.5
+pypdfium2>=4.0          # [1단계] PDF 페이지 렌더
+pytesseract>=0.3        # [3·4단계] 가사/제목/크레딧(한글) OCR — 파이썬 바인딩
+# ⚠ pytesseract는 시스템 Tesseract 엔진이 별도로 필요합니다(pip 설치와는
+#   무관한 별도 프로그램입니다 — 이걸 안 하면 크래시 없이 조용히 가사·
+#   제목 인식만 빠집니다. 편집기의 가사 패널에 빨간 글씨로 정확한 원인이
+#   표시됩니다):
+#   Windows: https://github.com/UB-Mannheim/tesseract/wiki 에서 설치
+#            프로그램 실행 → "Additional language data" 에서 Korean 체크
+#            → 설치 후 Tesseract 경로를 시스템 PATH 에 추가
+#            (또는 파이썬에서 pytesseract.pytesseract.tesseract_cmd 로 지정)
+#   Ubuntu/Debian: apt install tesseract-ocr tesseract-ocr-kor
+#   macOS: brew install tesseract tesseract-lang
+#   미설치여도 나머지 기능(인식/편집/MIDI/PDF)은 전부 정상 동작합니다.
+# --- 선택(합성 샘플 생성 tools/make_synthetic.py 전용) ---
+# verovio>=4.0
+# cairosvg>=2.7
