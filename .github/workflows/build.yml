@@ -15,6 +15,8 @@ permissions:
 
 env:
   AUDIVERIS_VER: "5.11.0"
+  PYTHONIOENCODING: utf-8          # Windows 콘솔(cp1252)에서 한글 출력이 깨져 실패하지 않게
+  PYTHONUTF8: "1"
   AUDIVERIS_URL: https://github.com/Audiveris/audiveris/releases/download
 
 jobs:
@@ -103,7 +105,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14            # Apple Silicon (M1~)
+          - runner: macos-latest        # Apple Silicon (M1~)
             arch: arm64
             optional: false
           - runner: macos-15-intel      # 예전 인텔 맥
@@ -139,7 +141,8 @@ jobs:
         run: |
           DMG="Audiveris-$AUDIVERIS_VER-macosx-${{ matrix.arch }}.dmg"
           curl -fL -o "$DMG" "$AUDIVERIS_URL/$AUDIVERIS_VER/$DMG"
-          hdiutil attach -nobrowse -readonly -mountpoint /Volumes/aud "$DMG"
+          # DMG에 라이선스 동의 화면(AGPL)이 붙어 있어 그냥 열면 입력을 기다리다 실패한다 → 자동 동의
+          yes | PAGER=cat hdiutil attach -nobrowse -readonly -mountpoint /Volumes/aud "$DMG" > /dev/null
           ls -la /Volumes/aud
           APPSRC=$(find /Volumes/aud -maxdepth 2 -name "*.app" | head -1)
           echo "Audiveris 앱: $APPSRC"
