@@ -60,7 +60,7 @@ from score import musicxml as mx
 # 오류 수정 = 소수 둘째 자리 (예: 1.00 → 1.10 → 1.11 → 2.00)
 APP_NAME = "콩나물지기"
 APP_ID = "OMR_Sprouty"
-APP_VERSION = "3.50"
+APP_VERSION = "3.60"
 _USER_MSG = "\x00USER\x00"     # [v1.21] 안내 문구만 보여줄 오류 표시(코드 추적 대신)
 
 # [화면 정리 — 실사용 요청] 편집 악보의 음표별 박수·마디 합계 숫자는 가사와 겹치기도 하고,
@@ -1281,7 +1281,7 @@ class AboutDialog(QDialog):
     GITHUB_URL = "https://github.com/zpischun-eng/OMR_Sprouty"
 
     def __init__(self, parent=None, version: str = APP_VERSION, load_info=None, on_rerecognize=None,
-                 on_diagnose=None, on_check_update=None):
+                 on_diagnose=None, on_check_update=None, on_batch_verify=None):
         super().__init__(parent)
         self.setWindowTitle("프로그램 정보")
         self.setModal(True)
@@ -1337,6 +1337,16 @@ class AboutDialog(QDialog):
                 row.addWidget(b2)
             row.addStretch(1)
             v.addLayout(row)
+        if on_batch_verify:
+            # [v3.60] 여러 악보를 한꺼번에 인식해 원본과 비교(프로그램 품질 점검용)
+            row2 = QHBoxLayout()
+            b3 = QPushButton("폴더 일괄 검증…")
+            b3.setToolTip("폴더의 악보를 모두 인식해 원본 그림과 편집 악보를 비교하고,\n"
+                          "점수표·차이 그림·보내기용 zip을 만듭니다(시간이 오래 걸립니다)")
+            b3.clicked.connect(lambda: (self.accept(), on_batch_verify()))
+            row2.addWidget(b3)
+            row2.addStretch(1)
+            v.addLayout(row2)
         v.addWidget(QLabel("<b>사용된 오픈소스 구성 요소</b>"))
 
         components = QLabel(
@@ -2220,6 +2230,8 @@ class BusyOverlay(QWidget):
 
 class ScoreEditorWindow(QMainWindow):
     _updateResult = Signal(object, bool)       # [v3.50] 새 버전 확인 결과(정보 dict | 예외 | None, 직접 확인?)
+    _verifyProgress = Signal(int, int, str, str)   # [v3.60] 일괄 검증 진행(끝난 수, 전체, 파일, 단계)
+    _verifyDone = Signal(object)                   # 요약 dict 또는 예외
 
     def __init__(self):
         super().__init__()
@@ -3669,8 +3681,101 @@ class ScoreEditorWindow(QMainWindow):
         dlg = AboutDialog(self, load_info=getattr(self, "_last_load_info", None),
                           on_rerecognize=self._rerecognize if has else None,
                           on_diagnose=self._save_diagnostics if has else None,
-                          on_check_update=lambda: self.check_update(manual=True))
+                          on_check_update=lambda: self.check_update(manual=True),
+                          on_batch_verify=self.on_batch_verify)
         dlg.exec()
+
+    # ------------------------------------------------------------- [v3.60] 폴더 일괄 검증
+    def on_batch_verify(self):
+        """폴더(하위 폴더 포함)의 악보를 모두 인식해 원본과 비교한다. 뒤에서 돌고, 끝난 파일은 다음에 건너뛴다."""
+        from omr_bridge import verify as vf
+        from PySide6.QtWidgets import QProgressDialog
+        if getattr(self, "_verify_running", False):
+            return
+        folder = QFileDialog.getExistingDirectory(self, "검증할 악보 폴더 고르기")
+        if not folder:
+            return
+        files = vf.find_scores(folder)
+        if not files:
+            QMessageBox.information(self, "폴더 일괄 검증", "이 폴더에는 악보 파일(PDF·JPG·PNG 등)이 없습니다.")
+            return
+        limit, ok = QInputDialog.getInt(
+            self, "폴더 일괄 검증",
+            f"악보 {len(files)}개를 찾았습니다. 몇 곡을 검증할까요?\n"
+            f"(0 = 전부. 숫자를 적으면 전체에서 고르게 그만큼만 — 처음엔 20곡쯤으로 시험해 보세요)\n"
+            f"한 쪽에 1~2분쯤 걸립니다. 이미 끝난 곡은 건너뜁니다.",
+            min(20, len(files)), 0, len(files))
+        if not ok:
+            return
+        dlg = QProgressDialog("준비 중…", "멈추기", 0, max(1, limit or len(files)), self)
+        dlg.setWindowTitle("폴더 일괄 검증")
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.setMinimumWidth(460)
+        self._verify_dlg, self._verify_running, self._verify_t0 = dlg, True, time.time()
+        self._verify_cancel = False
+        dlg.canceled.connect(lambda: (setattr(self, "_verify_cancel", True),
+                                      self._set_status("일괄 검증: 지금 하던 곡까지만 마치고 멈춥니다…")))
+        if not getattr(self, "_verify_wired", False):
+            self._verifyProgress.connect(self._on_verify_progress)
+            self._verifyDone.connect(self._on_verify_done)
+            self._verify_wired = True
+        import threading
+
+        def work():
+            try:
+                res = vf.run_batch(folder, limit=limit, app_version=APP_VERSION,
+                                   progress=lambda i, n, name, stage: self._verifyProgress.emit(i, n, name, stage),
+                                   cancelled=lambda: self._verify_cancel)
+            except Exception as ex:
+                res = ex
+            self._verifyDone.emit(res)
+        threading.Thread(target=work, daemon=True).start()
+        dlg.show()
+
+    def _on_verify_progress(self, i, n, name, stage):
+        dlg = getattr(self, "_verify_dlg", None)
+        if dlg is None:
+            return
+        dlg.setMaximum(max(1, n))
+        dlg.setValue(min(i, n))
+        el = time.time() - self._verify_t0
+        left = f" · 남은 시간 약 {int(el / i * (n - i) / 60) + 1}분" if i >= 2 and n > i else ""
+        dlg.setLabelText(f"{i}/{n} 끝남{left}\n{name} {stage}" if name else stage)
+
+    def _on_verify_done(self, res):
+        self._verify_running = False
+        dlg = getattr(self, "_verify_dlg", None)
+        if dlg is not None:
+            dlg.close()
+            self._verify_dlg = None
+        if isinstance(res, Exception):
+            QMessageBox.warning(self, "폴더 일괄 검증", f"검증하지 못했습니다.\n{type(res).__name__}: {res}")
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle("폴더 일괄 검증")
+        box.setIcon(QMessageBox.Information)
+        part = "" if res["files_done"] >= res["files_total"] else f" (전체 {res['files_total']}개 중 — 멈춤)"
+        box.setText(f"<b>{res['files_done']}곡 검증을 마쳤습니다</b>{part}")
+        box.setInformativeText(
+            f"정상 {res['files_ok']}곡 · 인식 실패 {res['files_fail']}곡\n"
+            f"원본에만 있는 잉크 평균 {res['avg_miss_pct']}% · 편집 악보에만 평균 {res['avg_extra_pct']}%\n"
+            f"마디 검산 통과 평균 {res['avg_measures_ok_pct']}%\n\n"
+            f"결과 폴더: {res['out_dir']}\n"
+            f"· index.html — 차이가 큰 순서 보고서\n· summary.csv — 점수표\n"
+            f"· {os.path.basename(res['zip'])} — 보내기용(점수표 + 유형별 조각 그림)")
+        b_open = box.addButton("결과 폴더 열기", QMessageBox.AcceptRole)
+        b_rep = box.addButton("보고서 열기", QMessageBox.ActionRole)
+        box.addButton("닫기", QMessageBox.RejectRole)
+        box.exec()
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+        if box.clickedButton() is b_open:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(res["out_dir"]))
+        elif box.clickedButton() is b_rep:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.join(res["out_dir"], "index.html")))
 
     # ------------------------------------------------------------- [v3.50] 새 버전 알림
     def check_update(self, manual=False):
@@ -5368,6 +5473,25 @@ class _FileOpenFilter(QObject):
 
 
 def main():
+    if "--verify" in sys.argv:                 # [v3.60] 화면 없이 폴더 일괄 검증: --verify 폴더 [--limit N] [--out 폴더]
+        i = sys.argv.index("--verify")
+        args = sys.argv[i + 1:]
+        if args and not args[0].startswith("--"):
+            from omr_bridge import verify as vf
+            limit = int(args[args.index("--limit") + 1]) if "--limit" in args else 0
+            out = args[args.index("--out") + 1] if "--out" in args else None
+
+            def prog(k, n, name, stage):
+                try:
+                    print(f"[{k}/{n}] {name} {stage}", flush=True)
+                except Exception:
+                    pass                        # 창 프로그램(콘솔 없음)에서는 출력할 곳이 없다
+            res = vf.run_batch(args[0], out, limit=limit, progress=prog, app_version=APP_VERSION)
+            try:
+                print("보내기용 zip:", res["zip"])
+            except Exception:
+                pass
+            sys.exit(0)
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     _here = os.path.dirname(os.path.abspath(__file__))
