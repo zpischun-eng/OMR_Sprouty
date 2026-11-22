@@ -71,6 +71,7 @@ class ScoreMusic:
     # 마디부터 바뀌는지 기록. merge.py가 "줄 전체 최빈값" 대신 이 구간
     # 정보로 마디별 target_capacity를 더 정확히 계산하는 데 쓴다.
     time_changes: dict = field(default_factory=dict)
+    time_symbols: dict = field(default_factory=dict)   # [v3.40] {마디: "common"|"cut"} — C·₵ 기호로 찍힌 박자표
     # [v1.10 조표 바뀜] {마디번호: fifths} — 직전과 실제로 다른 조표가 시작되는 마디만.
     # fifths 는 곡 '처음' 조표다(예전엔 마지막 <key>로 덮어써 곡 전체가 끝 조표로 보였다).
     key_changes: dict = field(default_factory=dict)
@@ -193,6 +194,8 @@ def load_score_music(mxl_path: str) -> ScoreMusic:
                     sm.beats = int(t.find("beats").text)
                     sm.beat_type = int(t.find("beat-type").text)
                     sm.time_changes[mnum] = (sm.beats, sm.beat_type)
+                    if t.get("symbol") in ("common", "cut"):
+                        sm.time_symbols[mnum] = t.get("symbol")
 
             # [셈여림·쐐기] <direction>은 음표 사이사이에 순서대로 끼어 있다. 마디의
             # 자식들을 순서대로 훑으며 "보표별 대기열"에 쌓았다가 그 보표의 다음

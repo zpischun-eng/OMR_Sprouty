@@ -399,8 +399,11 @@ def score_to_element(score, title="악보 인식 결과"):
                 cur_key = key_now
             if time_now != cur_time:
                 t = _sub(_attr(), "time")
-                if mi == 0 and getattr(score, "ts_symbol", None) == "common":
-                    t.set("symbol", "common")
+                sym_ = (getattr(measure, "ts_printed", None) or (0, 0, None))[2]      # [v3.40] 마디마다 C·₵
+                if mi == 0 and getattr(score, "ts_symbol", None) in ("common", "cut"):
+                    sym_ = score.ts_symbol
+                if sym_ in ("common", "cut") and tuple(time_now) == ((4, 4) if sym_ == "common" else (2, 2)):
+                    t.set("symbol", sym_)
                 _sub(t, "beats", time_now[0])
                 _sub(t, "beat-type", time_now[1])
                 cur_time = time_now

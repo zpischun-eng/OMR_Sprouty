@@ -60,7 +60,7 @@ from score import musicxml as mx
 # 오류 수정 = 소수 둘째 자리 (예: 1.00 → 1.10 → 1.11 → 2.00)
 APP_NAME = "콩나물지기"
 APP_ID = "OMR_Sprouty"
-APP_VERSION = "3.30"
+APP_VERSION = "3.40"
 _USER_MSG = "\x00USER\x00"     # [v1.21] 안내 문구만 보여줄 오류 표시(코드 추적 대신)
 
 # [화면 정리 — 실사용 요청] 편집 악보의 음표별 박수·마디 합계 숫자는 가사와 겹치기도 하고,
@@ -598,7 +598,7 @@ class OriginalImagePanel(SyncedViewport):
         self.brush_btn.setCheckable(True)
         self.brush_btn.setText("🖌")
         self.brush_btn.setToolTip("붓으로 기호 넣기 (B) — 원본에서 빠진 기호를 칠하면 후보를 보여 줍니다\n"
-                                  "Ctrl+휠: 붓 크기 · Esc: 칠한 것 지우기 · 오른쪽 끌기: 화면 이동")
+                                  "Ctrl+휠: 붓 크기 · Esc: 칠한 것 지우고 붓 끄기 · 오른쪽 끌기: 화면 이동")
         self.brush_btn.setFixedSize(38, 38)
         self.brush_btn.setStyleSheet(
             "QToolButton { font-size:20px; background:rgba(255,255,255,230); border:1px solid #c9ced6;"
@@ -2414,7 +2414,7 @@ class ScoreEditorWindow(QMainWindow):
         sc("L", self._lyrics_fill)                    # [v3.10] 가사 흘려 넣기
         sc("Alt+Right", lambda: self._lyrics_shift(+1))   # [v3.10] 가사 한 칸 밀기(오른쪽)
         sc("Alt+Left", lambda: self._lyrics_shift(-1))    # [v3.10] 가사 한 칸 당기기(왼쪽)
-        sc("Escape", lambda: self.image_panel.clear_brush() if self.image_panel._strokes else None)
+        sc("Escape", self._on_escape)                 # [v3.40] 칠한 것 지우기 + 붓 끄기
         sc("Shift+X", self._flip_stems)               # [v2.25] 기둥 방향 뒤집기(X는 '화음에서 음 빼기')
         sc("Shift+G", self._add_grace)                # [v2.21] 앞꾸밈음 넣기(G는 '고른 음을 꾸밈음으로')
         sc("Shift+V", lambda: self._toggle_articulation("accent"))
@@ -4343,7 +4343,21 @@ class ScoreEditorWindow(QMainWindow):
                      "tremolo1": "트레몰로 /", "tremolo2": "트레몰로 //", "tremolo3": "트레몰로 ///",
                      "caesura": "카이주라 //", "ped_line": "페달 선 ⎣_⎦", "gliss": "글리산도",
                      "cresc_text": "cresc.", "dim_text": "dim.", "decresc_text": "decresc.",
-                     "chord": "코드 이름…"}
+                     "chord": "코드 이름…",
+                     # [v3.40] 셋잇단음표·박자표
+                     "tuplet3": "셋잇단음표 3", "ts:common": "박자표 C (4/4)", "ts:cut": "박자표 ₵ (2/2)",
+                     "ts:2/4": "박자표 2/4", "ts:3/4": "박자표 3/4", "ts:4/4": "박자표 4/4", "ts:2/2": "박자표 2/2",
+                     "ts:3/8": "박자표 3/8", "ts:6/8": "박자표 6/8", "ts:9/8": "박자표 9/8",
+                     "ts:12/8": "박자표 12/8", "ts:5/4": "박자표 5/4", "ts:3/2": "박자표 3/2"}
+
+    def _on_escape(self):
+        """[v3.40] Esc: 칠한 자국·후보를 지우고 붓도 끈다(예전엔 자국만 지워 붓 아이콘이 켜진 채 남았다)."""
+        ip = self.image_panel
+        if getattr(ip, "_brush_on", False):
+            ip.set_brush(False)
+            self._set_status("붓을 껐습니다 (B로 다시 켜기)")
+        elif ip._strokes:
+            ip.clear_brush()
 
     def _brush_icon(self, key):
         try:
@@ -4352,6 +4366,12 @@ class ScoreEditorWindow(QMainWindow):
                 return _smufl_icon(_br.TEMPLATES[key][0], 120)
             if key in _br.OTTAVA:
                 return _smufl_icon(_br.OTTAVA[key], 100)
+            if key == "tuplet3":
+                return _smufl_icon(_br.TUPLET3, 110)
+            if key in ("ts:common", "ts:cut"):
+                return _smufl_icon(_br._TS_GLYPH[key], 110)
+            if key.startswith("ts:"):
+                return None
             if key == "gliss":
                 return _draw_icon(64, 64, lambda d, c: d.line([(8, 52), (56, 12)], fill=c, width=4))
             if key == "ped_line":
@@ -4446,7 +4466,7 @@ class ScoreEditorWindow(QMainWindow):
                  for k, sc_ in cands]                            # 가능성 높은 것부터
         self.image_panel.show_candidates(items)
         self._set_status("붓: 원하는 기호를 고르세요(왼쪽일수록 가능성이 높음) — 계속 칠하면 영역이 넓어집니다, "
-                         "Esc로 지우기")
+                         "Esc로 지우고 붓 끄기")
 
     def _brush_notes_on_line(self, ctx, staff_no=None):
         out = []
@@ -4751,6 +4771,14 @@ class ScoreEditorWindow(QMainWindow):
             self._snapshot()
             e.dynamic = {"key": key[4:], "x": tcx, "y": tcy, "auto": False}
             target = e
+        elif key == "tuplet3":
+            target = self._brush_tuplet(ctx, geom)
+            if target is None:
+                return
+        elif key.startswith("ts:"):
+            target = self._brush_timesig(ctx, geom, key)
+            if target is None:
+                return
         elif key == "dot":
             notes = [t for t in self._brush_notes_on_line(ctx)
                      if t[2] < cx and cx - t[2] <= 2.6 * il and abs(t[3] - cy_song) <= 0.8 * il]
@@ -4765,7 +4793,117 @@ class ScoreEditorWindow(QMainWindow):
             target = e
         self.image_panel.clear_brush()
         self._after_edit(target)
-        self._set_status(f"붓으로 {name}을(를) 넣었습니다 (Ctrl+Z로 되돌리기) — 붓은 켜져 있습니다(B로 끄기)")
+        extra, self._brush_extra = getattr(self, "_brush_extra", ""), ""
+        self._set_status(f"붓으로 {name}을(를) 넣었습니다{extra} (Ctrl+Z로 되돌리기) — 붓은 켜져 있습니다(B 또는 Esc로 끄기)")
+
+    def _brush_tuplet(self, ctx, geom):
+        """[v3.40] 붓: 셋잇단음표. 괄호가 덮는 음들(괄호 없이 '3'만이면 숫자 가운데의 음 3개)을 셋잇단으로.
+        보표는 괄호에 가까운 쪽(기둥 끝 포함) — 이미 셋잇단인 보표는 뒤로. 성부가 쪼개져 있었으면 다시 모은다."""
+        tp = geom.get("tuplet")
+        if not tp:
+            self._set_status("붓: 셋잇단음표 숫자 3을 찾지 못했습니다 — 숫자와 괄호를 함께 칠하세요")
+            return None
+        il, dy = ctx["il"], ctx["dy"]
+        x1_, x2_, dcx, dcy, bracket = tp
+        dcy += dy
+        notes = self._brush_notes_on_line(ctx)
+        by_staff = {}
+        for t in notes:
+            by_staff.setdefault(t[1].staff_no, []).append(t)
+
+        def pick(ts):
+            # 같은 자리(화음)는 한 묶음
+            grp = []
+            for t in sorted(ts, key=lambda t: t[2]):
+                if grp and abs(grp[-1][0][2] - t[2]) <= 0.6 * il and grp[-1][0][0] is t[0]:
+                    grp[-1].append(t)
+                else:
+                    grp.append([t])
+            if bracket:
+                return [g for g in grp if x1_ - 0.8 * il <= g[0][2] <= x2_ + 0.8 * il]
+            if len(grp) < 3:
+                return []
+            i = min(range(len(grp)), key=lambda k: abs(grp[k][0][2] - dcx))
+            i = max(0, min(len(grp) - 3, i - 1))
+            return grp[i:i + 3]
+        best = None
+        for sn_, ts in by_staff.items():
+            g = pick(ts)
+            if not g:
+                continue
+            ys_ = []
+            for gg in g:
+                for m, e, nx, ny in gg:
+                    ys_ += [e.src_bbox[1], e.src_bbox[1] + e.src_bbox[3]]
+                    st_ = getattr(e, "src_stem", None)
+                    if st_:
+                        ys_ += [st_[1], st_[2]]
+            top_, bot_ = min(ys_), max(ys_)
+            dist = (dcy - bot_) if dcy > bot_ else ((top_ - dcy) if dcy < top_ else 0.0)
+            if all(e.in_triplet for gg in g for _m, e, _x, _y in gg):
+                dist += 1e6                            # 이미 셋잇단인 보표는 마지막 후보
+            if best is None or dist < best[0]:
+                best = (dist, sn_, g)
+        if best is None:
+            self._set_status("붓: 셋잇단음표를 붙일 음표들을 찾지 못했습니다")
+            return None
+        _d, sn_, g = best
+        self._snapshot()
+        touched = []
+        for gg in g:
+            for m, e, _x, _y in gg:
+                e.in_triplet = True
+                if m not in touched:
+                    touched.append(m)
+        n_merge = sum(1 for m in touched if ed.merge_split_voices(self.score, m, sn_))
+        if n_merge:
+            self._brush_extra = " · 쪼개져 있던 성부를 하나로 모았습니다"
+        return g[0][0][1]
+
+    def _brush_timesig(self, ctx, geom, key):
+        """[v3.40] 붓: 박자표. 칠한 자리의 마디(줄 첫머리면 그 줄 첫 마디)에 원본처럼 박자표를 둔다.
+        곡 첫 마디면 곡 박자표, 앞 박자와 다르면 그 마디부터 박자가 바뀐다."""
+        from omr_bridge import brush as _br
+        il, sx_ = ctx["il"], ctx["sx"]
+        tb = geom.get("tbox") or geom["box"]
+        tcx = (tb[0] + tb[2]) / 2.0
+        sym = {"ts:common": "common", "ts:cut": "cut"}.get(key)
+        b, bt = {"ts:common": (4, 4), "ts:cut": (2, 2)}.get(key) or _br.TIMESIGS[key]
+        mb = sorted([b_ for b_ in self.layout_obj.measure_boxes if b_.measure.system == ctx["line"]],
+                    key=lambda b_: b_.bbox[0])
+        if not mb:
+            return None
+        # 박자표는 마디 맨 앞에 있다 — 가운데가 들어 있는 마디, 줄 머리(첫 마디 앞)면 첫 마디
+        meas_ = mb[0].measure
+        for b_ in mb:
+            if b_.bbox[0] / sx_ - il <= tcx:
+                meas_ = b_.measure
+        ms = sorted(self.score.measures, key=lambda m_: m_.number)
+        self._snapshot()
+        meas_.ts_printed = (b, bt, sym)
+        if meas_ is ms[0]:
+            self.score.beats, self.score.beat_type, self.score.ts_symbol = b, bt, sym
+            self.score.time_sig_known = True
+            meas_.time_sig_change = None
+        else:
+            prev = (self.score.beats, self.score.beat_type)
+            for m_ in ms:
+                if m_ is meas_:
+                    break
+                if getattr(m_, "time_sig_change", None):
+                    prev = m_.time_sig_change
+            meas_.time_sig_change = (b, bt) if (b, bt) != tuple(prev) else None
+        # 줄 단위로 덮어 둔 실효 길이는 새 박자표를 따르게(다음 박자 바뀜 전까지)
+        started = False
+        for m_ in ms:
+            if m_ is meas_:
+                started = True
+            elif started and getattr(m_, "time_sig_change", None):
+                break
+            if started:
+                m_.target_capacity = None
+        return next((e for e in meas_.elements if e.kind == "note"), None) or \
+            next((e for m_ in ms for e in m_.elements), None)
 
     # ------------------------------------------------------------- [v3.10] 가사 흘려 넣기
     def _lyric_pos(self, e, row):

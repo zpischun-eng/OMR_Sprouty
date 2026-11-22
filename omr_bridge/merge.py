@@ -877,7 +877,10 @@ def build_ctx(omr_path: str, mxl_path: str, original_w: int, original_h: int,
             # (4/4 … 6/8) 첫 줄 박자표까지 6/8로 잘못 나왔다. 첫 마디의 박자를 쓴다.
             "time_signature": (music.time_changes[min(music.time_changes)]
                                if music.time_changes else (music.beats, music.beat_type)),
-            "time_symbol": None,
+            # [v3.40] 첫 박자표가 C(common)·₵(cut) 기호면 숫자 대신 그 기호로 그린다(예전엔 늘 None → 4/4 숫자)
+            "time_symbol": (getattr(music, "time_symbols", {}) or {}).get(min(music.time_changes))
+                           if music.time_changes else None,
+            "time_symbols": dict(getattr(music, "time_symbols", {}) or {}),
             "beats": [e[5] for e in elements],
             "pitches": pitches,
             "elements": elements,

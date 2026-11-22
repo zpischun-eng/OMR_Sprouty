@@ -311,7 +311,8 @@ def render(layout, orig_w, orig_h, F=3, selected=None, header_strips=None,
         for sm in sys_members:
             sm_lines = _sysline(sm, F)
             sm_top = sm.staff_top * F
-            _draw_time_sig_at(d, tx, sm_lines, sm_top, ss, beats_val, beat_type_val)
+            _draw_time_sig_at(d, tx, sm_lines, sm_top, ss, beats_val, beat_type_val,
+                              (getattr(m, "ts_printed", None) or (0, 0, None))[2])   # [v3.40] C·₵ 기호
 
     # [v1.10 조표 바뀜] 줄 중간에서 바뀐 조표 — 그 줄의 모든 보표에(각 보표의 음자리표 기준)
     for km in getattr(layout, "key_marks", []):
@@ -1022,16 +1023,20 @@ def _draw_system(d, sysL, header, F, ss, xoff, skip_header=False):
             key_gap = min(max(key_gap, ss * 0.62), ss * 1.0)
     _draw_key_sig(d, kx, top, ss, fifths, clef_k, gap=key_gap)
 
-    # --- 박자표 (조표 오른쪽 / 첫 시스템에만) ---
-    if sysL.index == 0:
+    # --- 박자표 (조표 오른쪽 / 첫 시스템, [v3.40] 원본이 줄 첫머리에 다시 찍은 줄) ---
+    sys_ts = getattr(sysL, "time_sig", None)
+    if sysL.index == 0 or sys_ts:
         # 조표가 없으면(다장조) 음자리표 바로 뒤에, 있으면 마지막 기호 뒤에 띄운다.
         last_acc = kx + max(0, n_acc - 1) * (key_gap if key_gap else acc_gap)
         tx = (last_acc + ss * 1.7) if n_acc else (clef_x + ss * 2.8)
         if sh_.get("time") is not None:
             # [v2.30] 원본 박자표 가운데 — [v3.20] 조바꿈으로 조표가 길어져 닿으면 조표 뒤로
             tx = max(X(sh_["time"]), (last_acc + ss * 1.7) if n_acc else 0)
-        _draw_time_sig_at(d, tx, lines, top, ss, header["beats"], header["beat_type"],
-                          header.get("ts_symbol"))
+        if sys_ts and sysL.index != 0:
+            _draw_time_sig_at(d, tx, lines, top, ss, sys_ts[0], sys_ts[1], sys_ts[2])
+        else:
+            _draw_time_sig_at(d, tx, lines, top, ss, header["beats"], header["beat_type"],
+                              header.get("ts_symbol"))
 
 
 def _draw_clef_glyph(d, clef_k, cx, lines, ss):
@@ -1090,10 +1095,10 @@ def _draw_time_sig_at(d, tx, lines, top, ss, beats, beat_type, ts_symbol=None):
     위치에 직접 호출).
     """
     use_font = smufl.font_available()
-    if use_font and ts_symbol == "common":
+    if use_font and ts_symbol in ("common", "cut"):
         font = smufl.get_font(smufl.size_for_staff_space(ss))
         if font is not None:
-            d.text((tx, lines[2]), smufl.GLYPHS["timeSigCommon"],
+            d.text((tx, lines[2]), smufl.GLYPHS["timeSigCommon" if ts_symbol == "common" else "timeSigCutCommon"],
                    font=font, fill=INK, anchor="mm")
             return
     if use_font:

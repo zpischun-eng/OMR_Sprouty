@@ -68,6 +68,7 @@ class SystemLayout:
     part: int = 0               # [여러 파트] 이 보표의 논리 파트(마디선·중괄호를 파트 단위로)
     fifths: int = None          # [v1.10 조표 바뀜] 이 줄 머리에 그릴 조표(None이면 layout.header 값)
     src_head: dict = None       # [v2.30] 원본 줄 머리 기호 x(world): {"clef","key","time"}
+    time_sig: tuple = None      # [v3.40] 이 줄 머리에 원본이 다시 찍은 박자표 (beats, beat_type, symbol)
 
 
 @dataclass
@@ -381,13 +382,17 @@ def layout_score_world(score, staves_by_system, sx, sy, barlines=None, staff_gro
             part_count[part_by_sn[sn_]] = part_count.get(part_by_sn[sn_], 0) + 1
         key_at = getattr(score, "key_at", None)
         sys_fifths = key_at(min(m_.number for m_ in measures)) if key_at else score.fifths
+        m_first_ = min(measures, key=lambda m_: m_.number)
+        sys_ts = getattr(m_first_, "ts_printed", None)
+        if sys_ts is not None and getattr(m_first_, "time_sig_change", None):
+            sys_ts = None                     # 박자가 바뀌는 줄 첫 마디는 render의 박자 바뀜 그리기가 맡는다
         for sn, s_lines, s_top, s_space, _dt, _db in staff_infos:
             pt = part_by_sn.get(sn, 0)
             layout.systems.append(SystemLayout(
                 index=sid, staff_top=s_top, staff_space=s_space,
                 x_left=x_left, x_right=x_right, lines_y=list(s_lines),
                 staff_no=sn, brace_group=(sid * 100 + pt if part_count.get(pt, 1) > 1 else -1),
-                clef=clef_by_sn.get(sn, "G"), part=pt, fifths=sys_fifths,
+                clef=clef_by_sn.get(sn, "G"), part=pt, fifths=sys_fifths, time_sig=sys_ts,
                 src_head={k: v * sx for k, v in
                           ((getattr(score, "header_x", None) or {}).get(sid, {}).get(sn, {}) or {}).items()} or None))
 

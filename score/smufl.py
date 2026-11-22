@@ -51,6 +51,7 @@ GLYPHS = {
     "accidentalSharp": "\uE262",
     # 박자표 숫자(timeSig0..9 = E080..E089)
     "timeSigCommon": "\uE08A",
+    "timeSigCutCommon": "\uE08B",            # [v3.40] ₵(2/2)
     "timeSig": {str(i): chr(0xE080 + i) for i in range(10)},
     # 부점
     "augmentationDot": "\uE1E7",

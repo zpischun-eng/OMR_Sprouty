@@ -1520,6 +1520,40 @@ def infer_missed_time_changes(score, printed: dict) -> list:
     return added
 
 
+def merge_split_voices(score, measure, staff_no) -> bool:
+    """[v3.40] Audiveris가 셋잇단음표를 못 읽으면 한 줄로 이어진 음들의 박 위치가 맞지 않아 성부를 여러 개로
+    쪼갠다(데모 11마디 윗보표: A G F E D가 성부 1·2·3·4). 셋잇단을 바로잡은 뒤, 그 보표 요소들이 서로 겹치지
+    않고(같은 자리에는 한 성부만) 차례로 이어 붙인 길이가 마디 길이와 같으면 한 성부로 모은다. 모았으면 True."""
+    els = [e for e in measure.elements if e.staff_no == staff_no and not e.is_grace]
+    voices = {e.voice_no for e in els}
+    if len(voices) < 2 or not els:
+        return False
+    cap = _capacity_of(score, measure)
+
+    def xo(e):
+        return (e.src_bbox[0] + e.src_bbox[2] / 2.0) if e.src_bbox else (e.src_x or 0.0)
+    tol = max([0.6 * e.src_bbox[2] for e in els if e.src_bbox] or [6.0])
+    groups = []
+    for e in sorted(els, key=xo):
+        if groups and abs(xo(groups[-1][0]) - xo(e)) <= tol:
+            groups[-1].append(e)
+        else:
+            groups.append([e])
+    total = 0.0
+    for g in groups:
+        if len({x.voice_no for x in g}) > 1 or len({x.quarter_length() for x in g}) > 1:
+            return False                     # 같은 자리에 성부가 둘 — 진짜 다성부
+        if g[0].kind == "rest" and g[0].duration_base == 1 and not g[0].dotted:
+            return False
+        total += g[0].quarter_length()
+    if abs(total - cap) > 0.01:
+        return False
+    v = min(voices)
+    for e in els:
+        e.voice_no = v
+    return True
+
+
 def repair_voices(score, measure) -> bool:
     """[v1.40 성부 다시 나누기] Audiveris가 한 보표 안의 성부를 섞어 매긴 마디(예: "교회" 5마디 —
     아래 성부의 2박째 E4가 위 성부의 2분음표 뒤에 붙어 위 성부 3박·아래 성부 구멍)를 고친다.

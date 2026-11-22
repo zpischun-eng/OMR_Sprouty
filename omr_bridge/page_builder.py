@@ -42,7 +42,15 @@ def build_page(doc, sheet: int = 1) -> PageModel:
     score._omr_sheet = sheet
     score.header_x = dict(ctx.get("header_x") or {})     # [v2.30] 줄 머리 기호 원본 x
     il = ctx["staves"][1] - ctx["staves"][0] if len(ctx.get("staves") or []) > 1 else 20.0
-    ts_added = ed.infer_missed_time_changes(score, (ctx.get("recognition") or {}).get("time_printed") or {})
+    rec_ = ctx.get("recognition") or {}
+    ts_added = ed.infer_missed_time_changes(score, rec_.get("time_printed") or {})
+    # [v3.40] 원본에 찍힌 박자표를 마디에 기억 — 줄 첫머리에 다시 찍힌 박자표(값이 같아도)를 원본처럼 그리고,
+    # C·₵ 기호면 숫자 대신 기호로
+    syms_ = rec_.get("time_symbols") or {}
+    for m_ in score.measures:
+        pv = (rec_.get("time_printed") or {}).get(m_.number)
+        if pv is not None:
+            m_.ts_printed = (pv[0], pv[1], syms_.get(m_.number))
     if ts_added:
         notes.append("인식되지 않은 박자표를 마디 길이로 찾아 넣었습니다: " +
                      ", ".join(f"{n}마디 {b}/{bt}" for n, (b, bt) in ts_added))

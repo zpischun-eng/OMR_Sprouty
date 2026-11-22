@@ -35,6 +35,127 @@ TEXTS = {"dc": "D.C.", "ds": "D.S.", "fine": "Fine", "dc_al_fine": "D.C. al Fine
          "cresc_text": "cresc.", "dim_text": "dim.", "decresc_text": "decresc."}
 _TXCACHE = {}
 _TXCOUNT = {}
+# [v3.40] 박자표: C·₵ 기호와 자주 쓰는 숫자 박자표(위·아래 숫자를 오선 2·4번째 칸 가운데에 쌓은 모양)
+TIMESIGS = {"ts:common": None, "ts:cut": None, "ts:2/4": (2, 4), "ts:3/4": (3, 4), "ts:4/4": (4, 4),
+            "ts:2/2": (2, 2), "ts:3/8": (3, 8), "ts:6/8": (6, 8), "ts:9/8": (9, 8), "ts:12/8": (12, 8),
+            "ts:5/4": (5, 4), "ts:3/2": (3, 2)}
+_TS_GLYPH = {"ts:common": "\uE08A", "ts:cut": "\uE08B"}
+TUPLET3 = "\uE883"                     # 잇단음표 숫자 3(글꼴의 기울어진 숫자)
+_TSCACHE = {}
+
+
+def _timesig_template(key, il):
+    """박자표 모양(부울): C·₵는 글리프 하나, 숫자는 위(2번째 칸 가운데)·아래(4번째 칸 가운데)에 쌓는다."""
+    ck = (key, int(il))
+    if ck in _TSCACHE:
+        return _TSCACHE[ck]
+    from PIL import Image, ImageDraw
+    from score import smufl
+    size = int(4 * il)
+    fnt = smufl.get_font(size)
+    im = Image.new("L", (size * 3, size * 3), 0)
+    d = ImageDraw.Draw(im)
+    top = size                                          # 오선 맨 윗줄 y
+    if key in _TS_GLYPH:
+        d.text((size * 1.5, top + 2 * il), _TS_GLYPH[key], font=fnt, fill=255, anchor="mm")
+    else:
+        b, bt = TIMESIGS[key]
+        digs = smufl.GLYPHS["timeSig"]
+        d.text((size * 1.5, top + 1 * il), "".join(digs[c] for c in str(b)), font=fnt, fill=255, anchor="mm")
+        d.text((size * 1.5, top + 3 * il), "".join(digs[c] for c in str(bt)), font=fnt, fill=255, anchor="mm")
+    a = np.array(im) > 110
+    ys, xs = np.nonzero(a)
+    out = a[ys.min():ys.max() + 1, xs.min():xs.max() + 1] if len(xs) else None
+    _TSCACHE[ck] = out
+    return out
+
+
+def _digits_template(text, il):
+    ck = ("dg", text, int(il))
+    if ck in _TSCACHE:
+        return _TSCACHE[ck]
+    from PIL import Image, ImageDraw
+    from score import smufl
+    size = int(4 * il)
+    im = Image.new("L", (size * 3, size * 2), 0)
+    digs = smufl.GLYPHS["timeSig"]
+    ImageDraw.Draw(im).text((size * 1.5, size), "".join(digs[c] for c in text), font=smufl.get_font(size),
+                            fill=255, anchor="mm")
+    a = np.array(im) > 110
+    ys, xs = np.nonzero(a)
+    out = a[ys.min():ys.max() + 1, xs.min():xs.max() + 1] if len(xs) else None
+    _TSCACHE[ck] = out
+    return out
+
+
+def _trim(a):
+    ys, xs = np.nonzero(a)
+    return a[ys.min():ys.max() + 1, xs.min():xs.max() + 1] if len(xs) else None
+
+
+def match_timesigs(ink, il):
+    """칠한 잉크(오선을 지우고 세로로 이은 것)와 박자표 모양 비교 {키: 겹침}. 박자표는 오선 높이의 절반 이상.
+    숫자 박자표는 위·아래 숫자를 따로 비교한다(3/4와 5/4·2/4가 통째로는 비슷하게 겹친다)."""
+    out = {}
+    if ink is None or ink.shape[0] < 1.5 * il or ink.shape[0] > 5.0 * il or ink.shape[1] > 4.5 * il:
+        return out
+    # 위·아래 숫자 나누기: 가운데 근처의 빈 줄(없으면 한가운데)
+    H = ink.shape[0]
+    rows = ink.any(axis=1)
+    mids = [r for r in range(int(H * 0.3), int(H * 0.7)) if not rows[r]]
+    cut = min(mids, key=lambda r: abs(r - H / 2)) if mids else H // 2
+    top_, bot_ = _trim(ink[:cut]), _trim(ink[cut:])
+    two = top_ is not None and bot_ is not None and top_.shape[0] >= 0.8 * il and bot_.shape[0] >= 0.8 * il
+    for k in TIMESIGS:
+        best = 0.0
+        if k in _TS_GLYPH or not two:
+            for f in (0.85, 0.95, 1.05, 1.15):
+                t = _timesig_template(k, il * f)
+                if t is None or not (0.7 <= t.shape[0] / max(1, ink.shape[0]) <= 1.45):
+                    continue
+                best = max(best, _iou_centered(ink, t))
+            if k not in _TS_GLYPH:
+                best *= 0.85                      # 위·아래로 나뉘지 않은 잉크는 숫자 박자표일 가능성이 낮다
+        else:
+            b, bt = TIMESIGS[k]
+            for f in (0.85, 0.95, 1.05, 1.15):
+                tt, tb = _digits_template(str(b), il * f), _digits_template(str(bt), il * f)
+                if tt is None or tb is None or not (0.7 <= tt.shape[0] / max(1, top_.shape[0]) <= 1.45):
+                    continue
+                best = max(best, min(_iou_centered(top_, tt), _iou_centered(bot_, tb)))
+        out[k] = best
+    return out
+
+
+def find_tuplet3(ink, il):
+    """잇단음표 '3' 찾기: 잉크 조각 중 글꼴의 기울어진 숫자 3과 가장 닮은 것.
+    반환 (겹침, 숫자 가운데 x, 가운데 y, 괄호 있음?) — 좌표는 ink 안 좌표. 없으면 None.
+    괄호: 숫자 양쪽으로 뻗은 가로선(폭의 절반 이상)."""
+    if ink is None or ink.sum() < 6:
+        return None
+    n, lab, st, _c = cv2.connectedComponentsWithStats(ink.astype(np.uint8), 8)
+    best = None
+    for j in range(1, n):
+        x, y, w, h, a = st[j]
+        if not (0.6 * il <= h <= 2.4 * il and 0.4 * il <= w <= 1.8 * il and a >= 10):
+            continue
+        comp = (lab[y:y + h, x:x + w] == j)
+        for f in (0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.15, 1.3):
+            t = _template(TUPLET3, 4 * il * f)
+            if t is None or not (0.75 <= t.shape[0] / max(1, h) <= 1.33):
+                continue
+            v = _iou_centered(comp, t)
+            if best is None or v > best[0]:
+                best = (v, x + w / 2.0, y + h / 2.0, (x, y, w, h))
+    if best is None:
+        return None
+    v, dcx, dcy, (x, y, w, h) = best
+    rest = ink.copy()
+    rest[:, x:x + w] = 0
+    cols = rest.any(axis=0)
+    left, right = cols[:x].sum(), cols[x + w:].sum()
+    bracket = left >= 1.0 * il and right >= 1.0 * il
+    return v, dcx, dcy, bracket
 
 
 def _text_template(text):
@@ -305,6 +426,18 @@ def analyze(gray, strokes, radius, staff_ys_all, heads, il):
         # [v2.80] 글자 이동 기호(D.C. 등)
         for k, v in match_texts(crop, il).items():
             sc[k] = (0.9 + (v - 0.6) * 0.2) if v >= 0.6 else max(0.02, (v - 0.3) * 1.8)
+    # [v3.40] 박자표(C·₵·숫자)와 셋잇단음표('3' + 괄호) — 예전엔 후보에 아예 없었다
+    if len(tx) >= 6:
+        for k, v in match_timesigs(crop, il).items():
+            # 숫자끼리는 겹침 차이가 작아(3/4 0.87 · 5/4 0.80) 기울기를 크게 둔다
+            sc[k] = min(0.97, 0.95 + (v - 0.85)) if v >= 0.6 else max(0.02, (v - 0.3) * 1.8)
+        tp = find_tuplet3(tink[ty.min():ty.max() + 1, tx.min():tx.max() + 1], il)
+        ts_best = max([v_ for k_, v_ in sc.items() if k_ in TIMESIGS] or [0.0])
+        # 괄호 없는 '3'만 칠했으면 더 엄격하게(C 박자표 조각 등이 3과 반쯤 닮는다), 박자표가 더 맞으면 박자표
+        if tp is not None and (tp[0] >= (0.6 if tp[3] else 0.8)) and not (not tp[3] and ts_best >= 0.92):
+            v, dcx, dcy, bracket = tp
+            sc["tuplet3"] = 0.95 if bracket else 0.9
+            geom["tuplet"] = (X0 + tx.min(), X0 + tx.max() + 1, X0 + tx.min() + dcx, Y0 + ty.min() + dcy, bracket)
     # [v2.90] 계단형 페달 선(가로선 + 양 끝 세로 갈고리, 중간 ^ 꼭지 = 다시 밟기)
     if w >= 3.0 and h <= 2.0:
         rows = ink[by0:by1, bx0:bx1].mean(axis=1)
@@ -377,7 +510,13 @@ def analyze(gray, strokes, radius, staff_ys_all, heads, il):
         th_ = (ty.max() - ty.min()) / il
         if 0.8 <= th_ <= 2.4 and (tx.max() - tx.min()) / il <= 6.0 and max(sc.values()) < 0.85:
             geom["texty"] = True                      # 짧은 글자(코드 'C', 'Am7' 등)일 수 있음
-    keys = list(KINDS) + ["arpeggio", "ped_line", "gliss"] + list(TEMPLATES.keys()) + list(OTTAVA.keys()) + \
+    if "tuplet" in geom:                              # 괄호 양 끝 갈고리를 페달 선·이음줄로 읽지 않게
+        for k in ("ped_line", "slur", "tie", "cresc", "decresc", "gliss", "tenuto"):
+            sc[k] = min(sc.get(k, 0.02), 0.5)
+        for k in TEXTS:
+            sc[k] = min(sc.get(k, 0.02), 0.5)
+        sc["tuplet3"] = max(sc["tuplet3"], max(v_ for k_, v_ in sc.items() if k_ != "tuplet3") + 0.01)
+    keys = list(KINDS) + ["arpeggio", "ped_line", "gliss", "tuplet3"] + list(TIMESIGS.keys()) + list(TEMPLATES.keys()) + list(OTTAVA.keys()) + \
         list(TEXTS.keys())
     cands = sorted(keys, key=lambda k: -sc.get(k, 0.02))
     return {"cands": [(k, sc.get(k, 0.02)) for k in cands], "geom": geom}
