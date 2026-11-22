@@ -320,7 +320,7 @@ OMR_Sprouty_v1.00/
 - **배포 zip 한글 파일명**: 리눅스 `zip` 명령은 파일명을 UTF-8로 넣으면서 'UTF-8 표시(일반 목적 플래그 11번)'를 켜지 않아, Windows가 CP949로 읽어 `OMR_Sprouty_媛쒕컻珥앷큵.md`처럼 깨졌다. 이제 파이썬 `zipfile`로 묶는다(한글 이름에 UTF-8 표시가 자동으로 켜짐). 개발총괄 문서는 소스의 `docs/`에 들어 있다.
 
 ### v3.50 — 새 버전 알림·내려받기 페이지(Releases)
-- **내려받기 주소 하나로**: `v*` 태그를 올리면 자동 빌드가 Releases에 설치 파일을 올린다. 늘 최신 버전을 가리키는 주소 https://github.com/zpischun-eng/OMR_Sprouty/releases/latest 하나만 알려 주면 된다(Actions의 Artifacts 주소는 빌드마다 바뀌고 90일 뒤 사라지며 로그인이 필요).
+- **내려받기 주소 하나로**: main에 올린 `APP_VERSION`의 릴리스가 아직 없으면(또는 `v*` 태그를 올리면) 자동 빌드가 `vX.XX` 릴리스를 만들어 설치 파일을 올린다 — 버전 번호만 올려 올리면 곧 내려받기 페이지에 나온다(이 작업 환경에서는 태그를 직접 올릴 수 없어 이렇게 함). 늘 최신 버전을 가리키는 주소 https://github.com/zpischun-eng/OMR_Sprouty/releases/latest 하나만 알려 주면 된다(Actions의 Artifacts 주소는 빌드마다 바뀌고 90일 뒤 사라지며 로그인이 필요).
 - **새 버전 알림(`omr_bridge/update_check.py`)**: 켤 때 4초 뒤 하루 한 번 GitHub API(`releases/latest`)를 뒤에서 확인 → 새 버전이면 창(지금 내려받기: 이 OS에 맞는 파일 바로 / 바뀐 점 보기 / 나중에 / 이 버전은 알리지 않기). '정보' 창에 [새 버전 확인]. 인터넷이 없으면 자동 확인은 조용히 넘어간다. 상태는 캐시 폴더의 `update_check.json`, 자동 확인 끄기는 `SPROUTY_NO_UPDATE_CHECK=1`.
 - 릴리스 설명은 저장소 루트 `RELEASE_NOTES.md`(버전마다 고쳐 쓴다 — 알림 창에도 그대로 나온다).
 - '정보' 창 제목 "악보 OMR 편집기" → "콩나물지기".

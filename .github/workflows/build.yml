@@ -41,6 +41,18 @@ jobs:
           echo "VER=$VER" >> $GITHUB_ENV
           echo "APP=OMRSprouty_v${VER//./_}" >> $GITHUB_ENV
 
+      - name: 릴리스할 버전인지 확인 (새 버전이면 내려받기 페이지에 올림)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # v 태그를 올렸거나, main에 올린 APP_VERSION의 릴리스가 아직 없으면 → 이 빌드를 Releases에 올린다
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "DO_RELEASE=1" >> $GITHUB_ENV
+          elif [[ "$GITHUB_REF" == refs/heads/main ]] && ! gh release view "v$VER" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "DO_RELEASE=1" >> $GITHUB_ENV
+          fi
+
       - name: 실행 파일 만들기 (PyInstaller)
         run: pyinstaller --noconfirm OMREditor.spec
 
@@ -91,10 +103,13 @@ jobs:
             Output/*.exe
           if-no-files-found: warn
 
-      - name: 릴리스에 올리기 (태그일 때)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: 릴리스에 올리기 (새 버전·태그일 때)
+        if: env.DO_RELEASE == '1'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ env.VER }}
+          name: 콩나물지기 v${{ env.VER }}
+          target_commitish: ${{ github.sha }}
           body_path: RELEASE_NOTES.md
           files: |
             ${{ env.APP }}_Windows.zip
@@ -131,6 +146,18 @@ jobs:
           VER=$(python -c "import re;print(re.search(r'^APP_VERSION\s*=\s*\"([^\"]+)\"',open('editor_app_qt.py',encoding='utf-8').read(),re.M).group(1))")
           echo "VER=$VER" >> $GITHUB_ENV
           echo "APP=OMRSprouty_v${VER//./_}" >> $GITHUB_ENV
+
+      - name: 릴리스할 버전인지 확인 (새 버전이면 내려받기 페이지에 올림)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # v 태그를 올렸거나, main에 올린 APP_VERSION의 릴리스가 아직 없으면 → 이 빌드를 Releases에 올린다
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "DO_RELEASE=1" >> $GITHUB_ENV
+          elif [[ "$GITHUB_REF" == refs/heads/main ]] && ! gh release view "v$VER" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "DO_RELEASE=1" >> $GITHUB_ENV
+          fi
 
       - name: 앱 만들기 (PyInstaller)
         run: |
@@ -180,9 +207,12 @@ jobs:
           name: ${{ env.APP }}_Mac_${{ matrix.arch }}
           path: ${{ env.APP }}_Mac_${{ matrix.arch }}.zip
 
-      - name: 릴리스에 올리기 (태그일 때)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: 릴리스에 올리기 (새 버전·태그일 때)
+        if: env.DO_RELEASE == '1'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ env.VER }}
+          name: 콩나물지기 v${{ env.VER }}
+          target_commitish: ${{ github.sha }}
           body_path: RELEASE_NOTES.md
           files: ${{ env.APP }}_Mac_${{ matrix.arch }}.zip
