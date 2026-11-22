@@ -9,7 +9,8 @@
 
 ## 내려받기
 
-[Releases(내려받기)](https://github.com/zpischun-eng/OMR_Sprouty/releases) 페이지에서 내 컴퓨터에 맞는 파일을 받습니다.
+**최신 버전 내려받기: https://github.com/zpischun-eng/OMR_Sprouty/releases/latest** — 이 주소는 늘 가장 새 버전을 보여 줍니다.
+내 컴퓨터에 맞는 파일을 받습니다. 새 버전이 나오면 프로그램을 켤 때 알려 줍니다('정보' 창의 [새 버전 확인]으로도 확인).
 악보 인식 엔진(Audiveris 5.11.0)이 함께 들어 있어 따로 설치할 것이 없습니다.
 
 | 컴퓨터 | 받을 파일 |

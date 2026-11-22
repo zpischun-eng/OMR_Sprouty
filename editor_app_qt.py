@@ -60,7 +60,7 @@ from score import musicxml as mx
 # 오류 수정 = 소수 둘째 자리 (예: 1.00 → 1.10 → 1.11 → 2.00)
 APP_NAME = "콩나물지기"
 APP_ID = "OMR_Sprouty"
-APP_VERSION = "3.40"
+APP_VERSION = "3.50"
 _USER_MSG = "\x00USER\x00"     # [v1.21] 안내 문구만 보여줄 오류 표시(코드 추적 대신)
 
 # [화면 정리 — 실사용 요청] 편집 악보의 음표별 박수·마디 합계 숫자는 가사와 겹치기도 하고,
@@ -1281,7 +1281,7 @@ class AboutDialog(QDialog):
     GITHUB_URL = "https://github.com/zpischun-eng/OMR_Sprouty"
 
     def __init__(self, parent=None, version: str = APP_VERSION, load_info=None, on_rerecognize=None,
-                 on_diagnose=None):
+                 on_diagnose=None, on_check_update=None):
         super().__init__(parent)
         self.setWindowTitle("프로그램 정보")
         self.setModal(True)
@@ -1296,10 +1296,18 @@ class AboutDialog(QDialog):
         v.setContentsMargins(24, 20, 24, 16)
         v.setSpacing(8)
 
-        title = QLabel("♪ 악보 OMR 편집기")
+        title = QLabel(f"♪ {APP_NAME}")
         title.setObjectName("title")
         v.addWidget(title)
-        v.addWidget(QLabel(f"버전 {version}"))
+        ver_row = QHBoxLayout()
+        ver_row.addWidget(QLabel(f"버전 {version}"))
+        if on_check_update:                            # [v3.50] 새 버전 확인
+            bu = QPushButton("새 버전 확인")
+            bu.setToolTip("GitHub에 더 새 버전이 나왔는지 확인합니다")
+            bu.clicked.connect(on_check_update)
+            ver_row.addWidget(bu)
+        ver_row.addStretch(1)
+        v.addLayout(ver_row)
 
         notice = QLabel(
             "이 프로그램은 <b>현직 교사를 위한 비상업적 배포용</b>입니다."
@@ -2211,6 +2219,8 @@ class BusyOverlay(QWidget):
 
 
 class ScoreEditorWindow(QMainWindow):
+    _updateResult = Signal(object, bool)       # [v3.50] 새 버전 확인 결과(정보 dict | 예외 | None, 직접 확인?)
+
     def __init__(self):
         super().__init__()
         self.setAcceptDrops(True)                 # [v3.20] 악보 파일을 창에 끌어다 놓아 열기
@@ -3658,8 +3668,72 @@ class ScoreEditorWindow(QMainWindow):
         has = bool(getattr(self, "_source_path", None))
         dlg = AboutDialog(self, load_info=getattr(self, "_last_load_info", None),
                           on_rerecognize=self._rerecognize if has else None,
-                          on_diagnose=self._save_diagnostics if has else None)
+                          on_diagnose=self._save_diagnostics if has else None,
+                          on_check_update=lambda: self.check_update(manual=True))
         dlg.exec()
+
+    # ------------------------------------------------------------- [v3.50] 새 버전 알림
+    def check_update(self, manual=False):
+        """GitHub 최신 릴리스를 뒤에서(화면이 멈추지 않게) 확인한다. 자동이면 하루 한 번만."""
+        from omr_bridge import update_check as uc
+        if not manual and not uc.due_today():
+            return
+        if not getattr(self, "_update_wired", False):
+            self._updateResult.connect(self._on_update_result)
+            self._update_wired = True
+        if manual:
+            self._set_status("새 버전을 확인하는 중…")
+        import threading
+
+        def work():
+            try:
+                info = uc.fetch_latest()
+            except Exception as ex:                 # 인터넷 없음·GitHub 응답 없음·아직 릴리스 없음(404)
+                info = ex
+            self._updateResult.emit(info, manual)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_update_result(self, info, manual):
+        from omr_bridge import update_check as uc
+        if isinstance(info, Exception):
+            if manual:
+                code = getattr(info, "code", None)
+                msg = ("아직 GitHub에 공개된 버전이 없습니다." if code == 404 else
+                       "새 버전을 확인하지 못했습니다(인터넷 연결을 확인해 주세요).")
+                QMessageBox.information(self, "새 버전 확인", msg)
+            return
+        uc.mark_checked()
+        latest = info["version"]
+        if not uc.is_newer(latest, APP_VERSION):
+            if manual:
+                QMessageBox.information(self, "새 버전 확인", f"지금 쓰시는 v{APP_VERSION}이 최신 버전입니다.")
+            return
+        if not manual and uc.is_skipped(latest):
+            return
+        notes = info.get("notes") or ""
+        if len(notes) > 700:
+            notes = notes[:700].rstrip() + " …"
+        box = QMessageBox(self)
+        box.setWindowTitle("새 버전 알림")
+        box.setIcon(QMessageBox.Information)
+        box.setText(f"<b>{APP_NAME} 새 버전 v{latest}</b>이 나왔습니다. (지금 v{APP_VERSION})")
+        box.setInformativeText((notes + "\n\n" if notes else "") +
+                               "내려받아 설치하면 지금 버전 위에 그대로 바뀝니다(편집 파일은 그대로).")
+        asset = info.get("asset")
+        b_dl = box.addButton("지금 내려받기" if asset else "내려받기 페이지 열기", QMessageBox.AcceptRole)
+        b_page = box.addButton("바뀐 점 보기", QMessageBox.HelpRole) if asset else None
+        box.addButton("나중에", QMessageBox.RejectRole)
+        b_skip = box.addButton("이 버전은 알리지 않기", QMessageBox.DestructiveRole)
+        box.exec()
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+        clicked = box.clickedButton()
+        if clicked is b_dl:
+            QDesktopServices.openUrl(QUrl(asset["url"] if asset else info["page"]))
+        elif b_page is not None and clicked is b_page:
+            QDesktopServices.openUrl(QUrl(info["page"]))
+        elif clicked is b_skip:
+            uc.skip_version(latest)
 
     def _cache_dirs(self, path):
         """[v2.53] 이 악보의 인식 결과(캐시) 폴더들."""
@@ -5312,6 +5386,7 @@ def main():
                                     if a.lower().endswith(ScoreEditorWindow._DROP_EXT) and os.path.isfile(a)), None)
     if first:
         QTimer.singleShot(300, lambda: window.load_image(first))
+    QTimer.singleShot(4000, lambda: window.check_update(manual=False))     # [v3.50] 새 버전 알림(하루 한 번)
     sys.exit(app.exec())
 
 

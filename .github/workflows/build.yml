@@ -95,6 +95,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          body_path: RELEASE_NOTES.md
           files: |
             ${{ env.APP }}_Windows.zip
             Output/*.exe
@@ -183,4 +184,5 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          body_path: RELEASE_NOTES.md
           files: ${{ env.APP }}_Mac_${{ matrix.arch }}.zip
