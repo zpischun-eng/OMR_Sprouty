@@ -66,13 +66,11 @@ pyinstaller OMREditor.spec
 ### 자동 빌드 (GitHub Actions)
 
 `main`에 올리면 [Actions](https://github.com/zpischun-eng/OMR_Sprouty/actions)가 Windows·맥(Apple 칩·인텔) 판을 만들고,
-공식 Audiveris를 받아 넣은 뒤 실제로 악보 하나를 인식해 보는 점검까지 합니다. 결과는 각 실행의 **Artifacts**에서 받습니다.
-`v3.30`처럼 `v`로 시작하는 태그를 올리면 같은 파일로 Releases 페이지가 만들어집니다.
+공식 Audiveris를 받아 넣은 뒤 실제로 악보 하나를 인식해 보는 점검까지 합니다.
 
-```
-git tag v3.30
-git push origin v3.30
-```
+- **시험판**: 버전 번호(`APP_VERSION`)를 올려 올리면 [Releases 목록](https://github.com/zpischun-eng/OMR_Sprouty/releases)에
+  시험판(pre-release)으로 올라갑니다. 시험판은 '최신 버전' 주소와 프로그램의 새 버전 알림에 나오지 않습니다.
+- **정식판**: `STABLE_VERSION` 파일에 적은 버전만 정식(최신)으로 지정됩니다. 그 파일을 바꿔 올리면 됩니다.
 
 자세한 실행·배포 안내는 [RUNNING_GUIDE.md](RUNNING_GUIDE.md), 사용법은 [USER_MANUAL.md](USER_MANUAL.md),
 개발 기록은 [docs/OMR_Sprouty_개발총괄.md](docs/OMR_Sprouty_개발총괄.md)에 있습니다.

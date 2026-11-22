@@ -1,0 +1,29 @@
+# 정식 배포 지정 — STABLE_VERSION 파일만 바꿔 올리면 빌드 없이 그 버전을 정식(latest)으로 바꾼다.
+# 정식 버전만 '최신 버전 내려받기' 주소와 프로그램의 새 버전 알림에 나온다.
+name: promote
+
+on:
+  push:
+    branches: [main]
+    paths: ["STABLE_VERSION"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 정식 버전 지정
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          S=$(tr -d ' \r\n' < STABLE_VERSION)
+          if gh release view "v$S" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release edit "v$S" -R "$GITHUB_REPOSITORY" --prerelease=false --latest
+            echo "정식 버전: v$S"
+          else
+            echo "v$S 릴리스가 아직 없습니다(빌드가 끝나면 build 작업이 지정합니다)"
+          fi

@@ -1,6 +1,9 @@
 # 콩나물지기 자동 빌드 — Windows·맥 실행 파일을 만들고 Audiveris(공식 5.11.0)를 함께 넣는다.
 #  · main에 올릴 때 / 수동 실행: 빌드 결과를 Actions 화면의 'Artifacts'에 올린다.
-#  · v로 시작하는 태그(예: v3.30)를 올릴 때: 같은 파일로 Releases(내려받기 페이지)를 만든다.
+#  · 새 APP_VERSION이면 Releases에 '시험판(pre-release)'으로 올린다 — 시험판은 '최신 버전' 주소와
+#    프로그램의 새 버전 알림에 나오지 않는다(개발자만 받아서 시험).
+#  · 정식 배포: STABLE_VERSION 파일에 적힌 버전만 정식(latest)으로 올린다(맨 아래 promote 작업,
+#    그 파일만 바꿀 때는 promote.yml이 빌드 없이 처리).
 # Audiveris는 저장소에 넣지 않고 빌드할 때마다 공식 배포 파일을 받아 넣는다(AGPL 고지 포함).
 name: build
 
@@ -8,6 +11,7 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    paths-ignore: ["STABLE_VERSION", "**.md", "docs/**"]
   workflow_dispatch:
 
 permissions:
@@ -47,6 +51,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # v 태그를 올렸거나, main에 올린 APP_VERSION의 릴리스가 아직 없으면 → 이 빌드를 Releases에 올린다
+          echo "STABLE=$(tr -d ' \r\n' < STABLE_VERSION)" >> $GITHUB_ENV
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             echo "DO_RELEASE=1" >> $GITHUB_ENV
           elif [[ "$GITHUB_REF" == refs/heads/main ]] && ! gh release view "v$VER" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
@@ -110,6 +115,8 @@ jobs:
           tag_name: v${{ env.VER }}
           name: 콩나물지기 v${{ env.VER }}
           target_commitish: ${{ github.sha }}
+          prerelease: ${{ env.VER != env.STABLE }}        # 정식으로 지정한 버전이 아니면 시험판
+          make_latest: ${{ env.VER == env.STABLE && 'true' || 'false' }}
           body_path: RELEASE_NOTES.md
           files: |
             ${{ env.APP }}_Windows.zip
@@ -153,6 +160,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # v 태그를 올렸거나, main에 올린 APP_VERSION의 릴리스가 아직 없으면 → 이 빌드를 Releases에 올린다
+          echo "STABLE=$(tr -d ' \r\n' < STABLE_VERSION)" >> $GITHUB_ENV
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             echo "DO_RELEASE=1" >> $GITHUB_ENV
           elif [[ "$GITHUB_REF" == refs/heads/main ]] && ! gh release view "v$VER" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
@@ -214,5 +222,26 @@ jobs:
           tag_name: v${{ env.VER }}
           name: 콩나물지기 v${{ env.VER }}
           target_commitish: ${{ github.sha }}
+          prerelease: ${{ env.VER != env.STABLE }}        # 정식으로 지정한 버전이 아니면 시험판
+          make_latest: ${{ env.VER == env.STABLE && 'true' || 'false' }}
           body_path: RELEASE_NOTES.md
           files: ${{ env.APP }}_Mac_${{ matrix.arch }}.zip
+
+  # 정식 배포 지정: STABLE_VERSION에 적힌 버전의 릴리스를 정식(latest)으로 바꾼다(이미 정식이면 그대로)
+  promote:
+    needs: [windows, mac]
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 정식 버전 지정
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          S=$(tr -d ' \r\n' < STABLE_VERSION)
+          if gh release view "v$S" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release edit "v$S" -R "$GITHUB_REPOSITORY" --prerelease=false --latest
+            echo "정식 버전: v$S"
+          else
+            echo "v$S 릴리스가 아직 없습니다"
+          fi
