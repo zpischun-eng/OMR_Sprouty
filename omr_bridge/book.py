@@ -184,11 +184,14 @@ class BookJob:
         cmd = [find_audiveris_bin(), "-batch"] + ocr_data.apply(env, []) + \
             ["-sheets", str(n), "-save", "-export", "-output", str(self.dir), "--", src]   # [v3.20] 글자 인식
         log = self.dir / f"sheet{n}.log"
+        from omr_bridge.audiveris_runner import jvm_env, log_tail
+        jvm_env(env)                                     # [v3.61] 자바 메모리 한도를 넉넉히
         with open(log, "w", encoding="utf-8") as lf:
             subprocess.run(cmd, stdout=lf, stderr=subprocess.STDOUT, timeout=timeout_sec, env=env)
         out_mxl = self.dir / "book.mxl"
         if not out_mxl.exists() or not self._sheet_in_omr(n):
-            raise RuntimeError(f"{n}페이지 인식에 실패했습니다(로그: {log})")
+            raise RuntimeError(f"{n}페이지 인식에 실패했습니다(로그: {log})\n--- 기록 끝 ---\n"
+                               + log_tail(log, 30, 2500))
         shutil.copyfile(out_mxl, self.mxl(n))
         meta = self._meta()
         meta.setdefault("done", [])

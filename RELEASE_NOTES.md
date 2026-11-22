@@ -1,10 +1,13 @@
-## 콩나물지기 v3.60
+## 콩나물지기 v3.61
 
 **어떤 파일을 받나요?**
-- Windows: `Kongnamuljigi_v3.60_Setup.exe` (설치형 — 이전 버전 위에 그대로 설치) 또는 `OMRSprouty_v3_60_Windows.zip` (설치 없이 쓰는 폴더형)
-- 맥(M1 이후 Apple 칩): `OMRSprouty_v3_60_Mac_arm64.zip` · 맥(인텔): `OMRSprouty_v3_60_Mac_x86_64.zip`
+- Windows: `Kongnamuljigi_v3.61_Setup.exe` (설치형 — 이전 버전 위에 그대로 설치) 또는 `OMRSprouty_v3_61_Windows.zip` (설치 없이 쓰는 폴더형)
+- 맥(M1 이후 Apple 칩): `OMRSprouty_v3_61_Mac_arm64.zip` · 맥(인텔): `OMRSprouty_v3_61_Mac_x86_64.zip`
   — 처음 한 번 `처음 한 번 실행.command`를 오른쪽 클릭 → 열기
 
 **바뀐 점**
 - 폴더 일괄 검증('정보' 창 → [폴더 일괄 검증…]): 폴더의 악보를 모두 인식해 원본 그림과 편집 악보를 겹쳐 비교하고,
   점수표(summary.csv)·차이 그림 보고서(index.html)·보내기용 zip을 만듭니다. 프로그램 품질을 점검하는 기능입니다.
+- (3.61) 악보 글꼴로 만든 PDF(NoteWorthy 등)에서 음표 글자가 글자로 읽혀 코드 이름·제목이 크게 겹쳐 그려지던 문제를 고쳤습니다.
+- (3.61) 인식이 한 번 실패했을 때 그림을 4배로 키우다 메모리가 모자라 멈추던 문제를 고쳤습니다(큰 그림은 줄여서 다시 시도). Audiveris가 쓸 수 있는 메모리 한도도 넉넉히 줍니다.
+- (3.61) 일괄 검증: 실패한 곡의 Audiveris 기록과 PC 환경(메모리)을 보내기용 zip에 담고, 편집 악보 쪽 글자도 점수에서 뺍니다.

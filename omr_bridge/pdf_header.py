@@ -149,7 +149,9 @@ _NON_LYRIC_WORDS = {"fine", "d.s.", "d.c.", "al", "coda", "segno", "d.s", "d.c",
 
 _MUSIC_FONT_RE = re.compile(r"opus|maestro|petrucci|sonata|jazz|engraver|broadway|bravura|leland|"
                             r"emmentaler|feta|gootville|petaluma|finale|musiqwik|toccata|november|"
-                            r"academico|bach|ekmelos", re.I)
+                            r"academico|bach|ekmelos|nwc\d|noteworthy|musicalsymbols|capella|encore|"
+                            r"anastasia|tamburo|mscore|musescore|lilypond|sibelius|inkpen|reprise|helsinki|"
+                            r"norfolk|scoring|golden\s*age|fughetta|vivace|musisync|seville", re.I)
 
 
 def _pdf_chars(pdf_path, page_index, dpi, crop_x0, crop_y0, music_marks=None):
@@ -193,9 +195,43 @@ def _pdf_chars(pdf_path, page_index, dpi, crop_x0, crop_y0, music_marks=None):
             pass
         return True
 
+    # [v3.61] 이름을 모르는 악보 글꼴도 모양으로 가린다. 악보 글꼴은 글자 칸(글꼴 높이)은 오선만큼 큰데
+    # 실제 글자 그림은 작다(NoteWorthy 'NWC2STDA': 칸 38pt에 그림 6~15pt). 영숫자 글자의
+    # (그림 높이 ÷ 칸 높이) 중앙값이 0.45 미만이고, 칸 높이가 이 페이지 글자들의 1.5배 이상이면 악보 글꼴.
+    # (실사용: 가톨릭 성가 PDF — 음표 글자 a·f·k·j가 글자로 읽혀 코드 이름·제목이 4배 크기로 그려졌다)
+    fname_of, stat = {}, {}
+    n_chars = tp.count_chars()
+    for i in range(n_chars):
+        ch = tp.get_text_range(i, 1)
+        if not ch or ch.isspace() or not _is_text_char(ch):
+            continue
+        fn = _font_name(i)
+        fname_of[i] = fn
+        if ch.isalnum():
+            try:
+                _l, b0, _r, t0 = tp.get_charbox(i, loose=False)
+                _l, b1, _r, t1 = tp.get_charbox(i, loose=True)
+            except Exception:
+                continue
+            if t1 - b1 > 0.5:
+                stat.setdefault(fn, []).append(((t0 - b0) / (t1 - b1), t1 - b1))
+    shape_music = set()
+    all_h = sorted(h for v in stat.values() for _r, h in v)
+    if all_h:
+        med_h = all_h[len(all_h) // 2]
+        for fn, v in stat.items():
+            if len(v) < 4 or _MUSIC_FONT_RE.search(fn):
+                continue
+            ratios = sorted(r for r, _h in v)
+            hs = sorted(h for _r, h in v)
+            if ratios[len(ratios) // 2] < 0.45 and hs[len(hs) // 2] >= 1.5 * med_h:
+                shape_music.add(fn)
+        if len(shape_music) == len(stat) and len(stat) > 0:
+            shape_music = set()                  # 전부 악보 글꼴일 리는 없다 — 판단 보류
+
     out = []
     pending_space = False
-    for i in range(tp.count_chars()):
+    for i in range(n_chars):
         ch = tp.get_text_range(i, 1)
         if ch and ch.isspace():
             pending_space = True                 # 다음 글자 앞에 띄어쓰기가 있었다는 표시
@@ -203,8 +239,8 @@ def _pdf_chars(pdf_path, page_index, dpi, crop_x0, crop_y0, music_marks=None):
         if not ch:
             continue
         is_text = _is_text_char(ch)
-        fname = _font_name(i) if (is_text or music_marks is not None) else ""
-        in_music_font = bool(_MUSIC_FONT_RE.search(fname))
+        fname = (fname_of.get(i) or _font_name(i)) if (is_text or music_marks is not None) else ""
+        in_music_font = bool(_MUSIC_FONT_RE.search(fname)) or fname in shape_music
         if music_marks is not None and (not is_text or in_music_font):
             kind = _music_note_kind(ch, in_music_font)
             if kind and _visible(i):

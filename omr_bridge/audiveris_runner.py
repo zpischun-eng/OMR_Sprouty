@@ -147,23 +147,88 @@ class AudiverisResult:
     log_path: Optional[str] = None
 
 
-def _ensure_upscaled_force(image_path: str, work_dir: Path):
-    """[실사용 검증 후 재설계] 무조건 4배 업스케일한다.
+def _retry_scaled(image_path: str, work_dir: Path):
+    """[v3.61] 첫 시도가 실패했을 때 다시 넣을 그림과 배율 (경로, 배율).
 
-    이전 버전(_estimate_interline_px로 사전에 필요 여부를 추정)은
-    이미지 높이만 보는 매우 거친 추정이라, 실제로는 충분히 고해상도인
-    이미지까지 잘못 판단해 불필요하게 업스케일하는 사고가 있었다.
-    이제는 이 함수가 "1차 원본 시도가 실패했을 때만" run_single()에서
-    호출되므로, 여기서는 더 따질 필요 없이 그냥 업스케일한다(4배는
-    이전 조사에서 검증된 실질적 최적값 -- INVESTIGATION_LOG_upscale.md).
+    예전에는 무조건 4배로 키웠다. 그런데 PDF에서 400dpi로 그린 그림(약 1천만 화소)은 이미 충분히 큰데도
+    4배(1억 7천만 화소)로 키우다가 메모리가 모자라 죽거나(MemoryError), 키운 그림을 Audiveris가 감당하지
+    못했다(실사용: 가톨릭 성가 20곡 중 14곡 실패).
+      · 큰 그림(600만 화소 이상) → 해상도 부족이 아니다. 메모리 부담을 줄이려 0.75배로 줄여 다시 시도.
+      · 작은 그림 → 키우되 결과가 4천만 화소를 넘지 않게(최대 4배). 1.25배도 못 키우면 그대로 다시.
     """
-    factor = 4
+    import math
     with Image.open(image_path) as im:
         w, h = im.size
-        im2 = im.resize((w * factor, h * factor), Image.LANCZOS)
-        out_path = work_dir / f"upscaled_{Path(image_path).stem}.png"
+        px = float(w * h)
+        if px >= 6e6:
+            factor = 0.75
+        else:
+            factor = min(4.0, math.sqrt(40e6 / max(1.0, px)))
+            if factor < 1.25:
+                return image_path, 1.0
+            factor = float(int(factor * 4) / 4.0)            # 0.25 단위(좌표 환산 오차를 줄인다)
+        nw, nh = int(round(w * factor)), int(round(h * factor))
+        im2 = im.resize((nw, nh), Image.LANCZOS)
+        out_path = work_dir / f"{'upscaled' if factor > 1 else 'scaled'}_{Path(image_path).stem}.png"
         im2.save(out_path)
-    return str(out_path), float(factor)
+    return str(out_path), nw / float(w)
+
+
+def _total_ram_mb():
+    """이 컴퓨터의 전체 메모리(MB). 알 수 없으면 None."""
+    try:
+        if sys.platform.startswith("win"):
+            import ctypes
+
+            class _MS(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("sullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            ms = _MS()
+            ms.dwLength = ctypes.sizeof(_MS)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms)):
+                return int(ms.ullTotalPhys // (1024 * 1024)), int(ms.ullAvailPhys // (1024 * 1024))
+            return None
+        if sys.platform == "darwin":
+            out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5).stdout
+            return int(out.strip()) // (1024 * 1024), None
+        tot = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") // (1024 * 1024)
+        av = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_AVPHYS_PAGES") // (1024 * 1024)
+        return int(tot), int(av)
+    except Exception:
+        return None
+
+
+def jvm_env(env: dict) -> dict:
+    """[v3.61] Audiveris(자바)가 쓸 수 있는 메모리 한도를 넉넉히 준다. 자바의 기본 한도는 전체 메모리의 1/4이라
+    메모리가 적은 PC(4~8GB)에서는 큰 악보 그림을 처리하다 멈출 수 있다 → 전체의 절반(1~6GB 사이).
+    사용자가 JAVA_TOOL_OPTIONS를 직접 정해 두었으면 건드리지 않는다."""
+    if env.get("JAVA_TOOL_OPTIONS"):
+        return env
+    ram = _total_ram_mb()
+    if ram and ram[0]:
+        mx = int(max(1024, min(6144, ram[0] * 0.5)))
+        env["JAVA_TOOL_OPTIONS"] = f"-Xmx{mx}m"
+    return env
+
+
+def _log_note(log_path, text):
+    try:
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write("\n" + text + "\n")
+    except OSError:
+        pass
+
+
+def log_tail(log_path, n_lines=40, max_chars=3000):
+    """Audiveris 기록의 끝부분(실패 원인을 알리는 데 쓴다)."""
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            return "".join(f.readlines()[-n_lines:])[-max_chars:]
+    except OSError:
+        return ""
 
 
 def _run_audiveris_once(src: str, out_dir: Path, timeout_sec: int, tag: str = ""):
@@ -175,6 +240,7 @@ def _run_audiveris_once(src: str, out_dir: Path, timeout_sec: int, tag: str = ""
     env = os.environ.copy()
     env["LANG"] = "C.utf8"
     env["LC_ALL"] = "C.utf8"
+    jvm_env(env)
 
     stem = Path(src).stem
     log_path = out_dir / f"{stem}{tag}.audiveris.log"
@@ -184,9 +250,12 @@ def _run_audiveris_once(src: str, out_dir: Path, timeout_sec: int, tag: str = ""
         ["-export", "-output", str(out_dir), "--", src]           # [v3.20] 글자 인식(데이터 있을 때)
     try:
         with open(log_path, "w", encoding="utf-8") as logf:
-            subprocess.run(cmd, stdout=logf, stderr=subprocess.STDOUT,
-                          timeout=timeout_sec, env=env)
+            cp = subprocess.run(cmd, stdout=logf, stderr=subprocess.STDOUT,
+                                timeout=timeout_sec, env=env)
+        _log_note(log_path, f"[sprouty] exit code {cp.returncode} · JAVA_TOOL_OPTIONS={env.get('JAVA_TOOL_OPTIONS')} "
+                            f"· RAM(total, free MB)={_total_ram_mb()}")
     except subprocess.TimeoutExpired:
+        _log_note(log_path, f"[sprouty] timeout {timeout_sec}s · RAM(total, free MB)={_total_ram_mb()}")
         return False, None, None, str(log_path)
     except OSError as ex:                       # 파일은 있으나 실행할 수 없음(손상·권한 등)
         raise AudiverisNotFound(
@@ -235,7 +304,11 @@ def run_single(source_path: str, output_dir: str, timeout_sec: int = 180) -> Aud
     # 설령 다른 이유라도 업스케일로 우연히 해결되는 경우가 실사용에서
     # 관찰되었기 때문(예: 리듬 해석 실패도 더 선명한 입력에서 개선될 수 있음).
     if not source_path.lower().endswith(".pdf"):
-        up_src, upscale = _ensure_upscaled_force(source_path, work_dir)
+        tail1 = log_tail(log_path, 25, 1800)
+        try:
+            up_src, upscale = _retry_scaled(source_path, work_dir)
+        except MemoryError:
+            up_src, upscale = source_path, 1.0
         ok2, mxl_path2, omr_path2, log_path2 = _run_audiveris_once(
             up_src, out_dir, timeout_sec, tag="_retry")
         if ok2:
@@ -244,12 +317,14 @@ def run_single(source_path: str, output_dir: str, timeout_sec: int = 180) -> Aud
                 upscale_factor=upscale, log_path=log_path2,
             )
         return AudiverisResult(
-            status="error", error="export_failed_or_empty(원본·업스케일 둘 다 실패)",
+            status="error",
+            error=f"export_failed_or_empty(원본·배율 {upscale:g} 재시도 둘 다 실패)\n"
+                  f"--- 1차 기록 끝 ---\n{tail1}\n--- 2차 기록 끝 ---\n{log_tail(log_path2, 25, 1800)}",
             omr_path=omr_path2 or omr_path, upscale_factor=upscale,
             log_path=log_path2,
         )
 
     return AudiverisResult(
-        status="error", error="export_failed_or_empty",
+        status="error", error="export_failed_or_empty\n--- 기록 끝 ---\n" + log_tail(log_path, 30, 2500),
         omr_path=omr_path, upscale_factor=1.0, log_path=log_path,
     )

@@ -30,7 +30,7 @@ import cv2
 import numpy as np
 
 EXTS = (".pdf", ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
-VERIFY_VERSION = "1"                    # 비교 방법이 바뀌면 올린다(예전 items 결과를 다시 계산)
+VERIFY_VERSION = "2"                    # 비교 방법이 바뀌면 올린다(예전 items 결과를 다시 계산)
 GOOD = ("ok", "anacrusis", "time_change")
 
 # 유형(내부 키) → 보고서 문구
@@ -291,8 +291,13 @@ def diff_page(pd):
     op = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k2, k2))
     miss = cv2.morphologyEx(miss.astype(np.uint8), cv2.MORPH_OPEN, op) > 0
     extra = cv2.morphologyEx(extra.astype(np.uint8), cv2.MORPH_OPEN, op) > 0
-    text = _find_text(miss, pd.staves, il) | (miss & _outside_music(a, pd.staves, il))
+    outside = _outside_music(a, pd.staves, il)
+    text = _find_text(miss, pd.staves, il) | (miss & outside)
     miss_m = miss & ~text
+    # [검증 2판] 편집 악보 쪽 글자(제목·가사·코드 이름을 다른 글꼴·위치로 그린 것)도 같은 기준으로 뺀다
+    text_r = _find_text(extra, pd.staves, il) | (extra & outside)
+    extra = extra & ~text_r
+    text = text | text_r
     union = (miss_m | extra).astype(np.uint8)
     km = max(3, int(round(il * 0.6))) | 1
     merged = cv2.dilate(union, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (km, km)))
@@ -322,7 +327,7 @@ def diff_page(pd):
                       "miss": mp, "extra": ep, "type": _classify(bw2, bh2, mp, ep, il),
                       "measure": meas, "staff_dist": round(dist / il, 2)})
     ink_o, ink_r = int(a.sum()), int(b.sum())
-    tpx = int(text.sum())
+    tpx = int((text & a).sum())                             # 글자 비율은 원본 잉크 기준
     return {"ink_orig": ink_o, "ink_ren": ink_r, "miss": int(miss_m.sum()), "extra": int(extra.sum()),
             "text": tpx, "blobs": blobs,
             "_masks": (a, b, miss_m, extra, text)}
@@ -418,7 +423,7 @@ def verify_file(path, out_dir, rel_name, progress=None, crops_per_file=10, timeo
         item["blobs"] = all_blobs
     except Exception as ex:                                   # 인식 실패·시간 초과·알 수 없는 형식
         item["status"] = "fail"
-        item["error"] = f"{type(ex).__name__}: {ex}"[:300]
+        item["error"] = f"{type(ex).__name__}: {ex}"[:6000]        # Audiveris 기록 끝부분까지(원인 분석용)
         item["trace"] = traceback.format_exc()[-1500:]
     item["seconds"] = round(time.time() - t0, 1)
     return item
@@ -486,7 +491,8 @@ def write_reports(out_dir, items, folder="", app_version="", total=None):
                      "text_pct": None if miss is None else round(100.0 * it["text"] / max(1, it["ink_orig"]), 1),
                      "blobs": len(it["blobs"]), **{f"n_{t}": counts[t] for t in TYPE_ORDER},
                      "bad_measures": " ".join(str(m) for m in it["bad_measures"][:40]),
-                     "seconds": it.get("seconds"), "error": it.get("error", ""), "id": it["id"]})
+                     "seconds": it.get("seconds"),
+                     "error": (it.get("error", "") or "").split("\n")[0][:200], "id": it["id"]})
     rows.sort(key=lambda r: (r["status"] == "ok", -(r["diff_score"] or 0)))
     cols = list(rows[0].keys()) if rows else ["file"]
     with open(out_dir / "summary.csv", "w", encoding="utf-8-sig", newline="") as f:
@@ -509,13 +515,28 @@ def write_reports(out_dir, items, folder="", app_version="", total=None):
                "avg_measures_ok_pct": round(float(np.mean([r["measures_ok_pct"] for r in ok_rows])), 1)
                if ok_rows else None,
                "type_counts": {t: sum(r[f"n_{t}"] for r in rows) for t in TYPE_ORDER},
-               "seconds_total": round(sum((it.get("seconds") or 0) for it in items), 1)}
+               "seconds_total": round(sum((it.get("seconds") or 0) for it in items), 1),
+               "env": _env_info()}
     with open(out_dir / "summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=1)
     _write_html(out_dir, rows, items, summary)
     summary["zip"] = str(make_send_zip(out_dir, items, summary))
     summary["out_dir"] = str(out_dir)
     return summary
+
+
+def _env_info():
+    """실행 환경(실패 원인을 가릴 때 쓴다): OS·메모리·Audiveris 위치."""
+    import platform
+    info = {"platform": platform.platform(), "python": platform.python_version(), "cpu": os.cpu_count()}
+    try:
+        from omr_bridge import audiveris_runner as ar
+        info["ram_total_free_mb"] = ar._total_ram_mb()
+        info["audiveris"] = str(ar.find_audiveris_bin())
+        info["java_tool_options"] = ar.jvm_env({}).get("JAVA_TOOL_OPTIONS")
+    except Exception as ex:
+        info["audiveris_error"] = str(ex)[:200]
+    return info
 
 
 def _write_html(out_dir, rows, items, summary):
