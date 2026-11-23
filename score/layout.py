@@ -171,6 +171,7 @@ def layout_score(score, width, staff_space=12, margin=24,
     layout = Layout(width=width, height=0, staff_space=ss,
                     header={"fifths": score.fifths, "beats": score.beats,
                             "ts_symbol": getattr(score, "ts_symbol", None),
+                            "time_sig_known": getattr(score, "time_sig_known", True),
                             "beat_type": score.beat_type})
 
     gid_counter = 0
@@ -296,6 +297,7 @@ def layout_score_world(score, staves_by_system, sx, sy, barlines=None, staff_gro
     layout = Layout(width=0, height=0, staff_space=0,
                     header={"fifths": score.fifths, "beats": score.beats,
                             "ts_symbol": getattr(score, "ts_symbol", None),
+                            "time_sig_known": getattr(score, "time_sig_known", True),
                             "beat_type": score.beat_type})
     layout.src_sx, layout.src_sy = sx, sy          # [v2.30] 원본 기하 → world
     # 마디 상태(못갖춘마디 인식 포함)를 한 번에 계산해 틴트/배지에 사용

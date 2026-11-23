@@ -43,6 +43,11 @@ def build_page(doc, sheet: int = 1) -> PageModel:
     score.header_x = dict(ctx.get("header_x") or {})     # [v2.30] 줄 머리 기호 원본 x
     il = ctx["staves"][1] - ctx["staves"][0] if len(ctx.get("staves") or []) > 1 else 20.0
     rec_ = ctx.get("recognition") or {}
+    if not getattr(score, "time_sig_known", True):
+        imp = ed.infer_implied_meter(score)            # [v3.63] 박자표 없음: 숨은 박자 또는 자유 리듬
+        notes.append(f"원본에 박자표가 없습니다 — 마디 길이가 대부분 {imp:g}박이라 그 길이로 검사합니다" if imp else
+                     "원본에 박자표가 없습니다 — 마디마다 길이가 달라 자유 리듬(그레고리오 성가 등)으로 보고 "
+                     "박자 검사를 하지 않습니다")
     ts_added = ed.infer_missed_time_changes(score, rec_.get("time_printed") or {})
     # [v3.40] 원본에 찍힌 박자표를 마디에 기억 — 줄 첫머리에 다시 찍힌 박자표(값이 같아도)를 원본처럼 그리고,
     # C·₵ 기호면 숫자 대신 기호로

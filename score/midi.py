@@ -54,7 +54,7 @@ def score_events(score, bpm: float = 100.0):
     t_cursor = 0.0
     for meas in ordered_measures:
         measure_start_t[meas.number] = t_cursor
-        cap = meas.target_capacity if meas.target_capacity is not None else score.capacity()
+        cap = _cap_of(score, meas)
         t_cursor += cap * spq
     total_len = t_cursor
 
@@ -179,7 +179,7 @@ def score_events(score, bpm: float = 100.0):
             by_m.setdefault(ev[4], []).append(ev)
         out, T = [], 0.0
         for meas in order:
-            cap = meas.target_capacity if meas.target_capacity is not None else score.capacity()
+            cap = _cap_of(score, meas)
             base = measure_start_t.get(meas.number, 0.0)
             for st, dur, mi, el, mn in by_m.get(meas.number, []):
                 out.append((T + (st - base), dur, mi, el, mn))
@@ -534,3 +534,9 @@ def synth_wav(events, path: str, sr: int = SR, vmap=None):
         w.setsampwidth(2)
         w.setframerate(sr)
         w.writeframes(pcm.tobytes())
+
+
+def _cap_of(score, meas):
+    """마디 길이(4분음표=1) — 편집기 검사와 같은 규칙(줄 실효 길이·박자 바뀜·[v3.63] 자유 리듬)."""
+    from .editing import _capacity_of
+    return _capacity_of(score, meas)

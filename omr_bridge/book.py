@@ -322,7 +322,8 @@ def append_page(state: BookState, pm, page_no: int, page_size, sys_logical=None)
         for m in state.score.measures:
             if m.time_sig_change:
                 prev_t = m.time_sig_change
-        if first.time_sig_change is None and (sc.beats, sc.beat_type) != prev_t:
+        if first.time_sig_change is None and getattr(sc, "time_sig_known", True) \
+                and (sc.beats, sc.beat_type) != prev_t:            # [v3.63] 박자표 없는 페이지는 앞 박자 그대로
             first.time_sig_change = (sc.beats, sc.beat_type)
     # ---- 좌표·번호 옮기기
     for m in sc.measures:

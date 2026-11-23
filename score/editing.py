@@ -42,7 +42,33 @@ def _capacity_of(score: Score, measure: Measure) -> float:
             break
     if ts:
         return ts[0] * 4.0 / ts[1]
+    if not getattr(score, "time_sig_known", True):
+        imp = getattr(score, "implied_capacity", None)
+        return imp if imp else free_capacity(measure)
     return score.capacity()
+
+
+def infer_implied_meter(score):
+    """[v3.63] 박자표가 없을 때: 가운데 마디들(첫·끝 제외)의 길이가 대부분(70% 이상) 같으면 그 길이를 '숨은 박자'로
+    보고 검사한다(발췌 악보처럼 박자표만 잘린 경우 — 오류 검사는 계속). 길이가 제각각이면 자유 리듬(마디마다
+    실제 길이 = 검사 안 함). 반환: 숨은 박자 길이(4분음표=1) 또는 None."""
+    ms = sorted(score.measures, key=lambda m: m.number)
+    mid = ms[1:-1] if len(ms) >= 4 else ms
+    if len(mid) < 3:
+        score.implied_capacity = None
+        return None
+    from collections import Counter
+    lens = Counter(round(free_capacity(m) * 4) / 4.0 for m in mid)
+    q, n = lens.most_common(1)[0]
+    score.implied_capacity = q if (n >= 0.7 * len(mid) and q > 0) else None
+    return score.implied_capacity
+
+
+def free_capacity(measure) -> float:
+    """[v3.63] 박자표 없는 자유 리듬(그레고리오 성가 등)의 마디 길이 = 그 마디에서 가장 긴 성부의 실제 길이.
+    원본에 박자표가 없으면 마디마다 길이가 달라 정해진 박자로 검사할 수 없다(예전엔 4/4로 보고 모두 '넘침')."""
+    by_voice = measure.quarter_sum_by_voice(4.0)
+    return max(by_voice.values()) if by_voice else 4.0
 
 
 def _real_voice_pool(measure: Measure, by_voice: dict, capacity: float = None) -> dict:

@@ -60,7 +60,7 @@ from score import musicxml as mx
 # 오류 수정 = 소수 둘째 자리 (예: 1.00 → 1.10 → 1.11 → 2.00)
 APP_NAME = "콩나물지기"
 APP_ID = "OMR_Sprouty"
-APP_VERSION = "3.62"
+APP_VERSION = "3.70"
 _USER_MSG = "\x00USER\x00"     # [v1.21] 안내 문구만 보여줄 오류 표시(코드 추적 대신)
 
 # [화면 정리 — 실사용 요청] 편집 악보의 음표별 박수·마디 합계 숫자는 가사와 겹치기도 하고,
@@ -2039,9 +2039,10 @@ class BottomEditBar(QFrame):
             acc = f"♭ {-fifths}개"
         else:
             acc = f"♯ {fifths}개"
-        suffix = "  (박자표 미상 — 직접 확인 필요)" if not ts_known else ""
-        ts_txt = f"C({beats}/{beat_type})" if ts_symbol == "common" \
-            else f"{beats}/{beat_type}"
+        # [v3.63] 원본에 박자표가 없으면(그레고리오 성가 등 자유 리듬) 마디마다 실제 길이로 검사한다
+        suffix = "" if ts_known else ""
+        ts_txt = ("박자표 없음(자유 리듬)" if not ts_known else
+                  f"C({beats}/{beat_type})" if ts_symbol == "common" else f"{beats}/{beat_type}")
         self.sig_label.setText(f"{key_name} ({acc})  ·  {ts_txt}{suffix}")
         self.sig_label.setStyleSheet(
             f"color:{'#e8a33d' if not ts_known else Tokens.ACCENT}; "

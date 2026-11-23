@@ -875,8 +875,10 @@ def build_ctx(omr_path: str, mxl_path: str, original_w: int, original_h: int,
             "key": _fifths_to_key(music.fifths),
             # [버그 수정] music.beats는 마지막 <time> 값이라 곡 중간에 박자가 바뀌면
             # (4/4 … 6/8) 첫 줄 박자표까지 6/8로 잘못 나왔다. 첫 마디의 박자를 쓴다.
+            # [v3.63] 원본에 박자표가 하나도 없으면 (0, 0) = '박자표 없음'(예전엔 4/4로 채워 그레고리오 성가의
+            # 모든 마디가 '넘침'이 되고 원본에 없는 4/4를 그렸다)
             "time_signature": (music.time_changes[min(music.time_changes)]
-                               if music.time_changes else (music.beats, music.beat_type)),
+                               if music.time_changes else (0, 0)),
             # [v3.40] 첫 박자표가 C(common)·₵(cut) 기호면 숫자 대신 그 기호로 그린다(예전엔 늘 None → 4/4 숫자)
             "time_symbol": (getattr(music, "time_symbols", {}) or {}).get(min(music.time_changes))
                            if music.time_changes else None,

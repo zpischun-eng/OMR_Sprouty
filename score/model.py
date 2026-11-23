@@ -286,6 +286,7 @@ class Score:
     beats: int = 4          # 박자표 분자
     beat_type: int = 4      # 박자표 분모
     time_sig_known: bool = True   # False면 박자표를 못 찾아 4/4로 임시 대체한 것
+    implied_capacity: Optional[float] = None   # [v3.63] 박자표 없음 + 마디 길이가 대부분 같을 때의 숨은 박자 길이
     measures: list = field(default_factory=list)
     arcs: list = field(default_factory=list)   # Arc 리스트(이음줄/붙임줄)
     hairpins: list = field(default_factory=list)  # Hairpin 리스트(크레센도/디크레센도)
@@ -673,6 +674,7 @@ def attach_lyrics(score, tokens, interline):
                 # 가사는 그 가사 바로 위 보표의 음표에만 붙인다(노래+피아노 악보)
                 by_line.setdefault((m.system, getattr(e, "staff_no", 1)), []).append(e)
     attached = missed = 0
+    leftover = []
     for tk in tokens:
         cands = by_line.get((tk["line"], tk.get("staff", 1)), [])
         best, best_d = None, None
@@ -685,15 +687,67 @@ def attach_lyrics(score, tokens, interline):
             if best_d is None or dd < best_d:
                 best, best_d = e, dd
         if best is None or best_d > 1.6 * interline:
-            missed += 1
+            leftover.append(tk)
             continue
         prev = best.lyrics.get(tk["row"])
         if prev is not None and prev["d"] <= best_d:
+            leftover.append(tk)
+            continue
+        if prev is not None:
+            leftover.append(prev["_tk"])
+        best.lyrics[tk["row"]] = {"text": tk["text"], "x": tk["x"], "y": tk["y"],
+                                  "h": tk["h"], "d": best_d, "_tk": tk}
+        attached += 1
+    # [v3.63] 낭송음(그레고리오 성가의 온음표 하나에 여러 낱말 — "그리스도와 함께 다시 살게 되었으니"):
+    # 붙지 못한 음절이 온음표(또는 다음 음까지 6칸 넘게 빈 음) 오른쪽 빈자리에 있으면 그 음의 가사에 이어 붙인다.
+    # 예전엔 음마다 가장 가까운 음절 하나만 남아 "그 스 와 함"처럼 나머지가 사라졌다.
+    reci = {}
+    for tk in leftover:
+        cands = by_line.get((tk["line"], tk.get("staff", 1)), [])
+
+        def cx_(e):
+            return (e.src_bbox[0] + e.src_bbox[2] / 2.0) if e.src_bbox else e.src_x
+        left = [e for e in cands if cx_(e) <= tk["x"]]
+        right = [e for e in cands if cx_(e) > tk["x"]]
+        if not left:
             missed += 1
             continue
-        best.lyrics[tk["row"]] = {"text": tk["text"], "x": tk["x"], "y": tk["y"],
-                                  "h": tk["h"], "d": best_d}
-        attached += 1
+        a = max(left, key=cx_)
+        b = min(right, key=cx_) if right else None
+        gap = (cx_(b) - cx_(a)) if b is not None else 1e9
+        # 같은 낱말의 이어지는 글자(음표 하나에 "그리"·"스도"처럼 두 글자) — 붙은 음절 바로 옆이면 그 음에
+        near = None
+        for e in cands:
+            ly = e.lyrics.get(tk["row"])
+            t0 = ly.get("_tk") if ly else None
+            if t0 is not None and abs(t0["x"] - tk["x"]) < 1.25 * tk["h"]:
+                if near is None or abs(t0["x"] - tk["x"]) < abs(near[1]["x"] - tk["x"]):
+                    near = (e, t0)
+        if near is not None:
+            reci.setdefault((id(near[0]), tk["row"]), (near[0], []))[1].append(tk)
+            attached += 1
+        elif (a.duration_base == 1 or gap > 6 * interline) and tk["x"] - cx_(a) < gap - 1.0 * interline \
+                and tk["row"] in a.lyrics:
+            reci.setdefault((id(a), tk["row"]), (a, []))[1].append(tk)
+            attached += 1
+        else:
+            missed += 1
+    for (_k, row), (a, tks) in reci.items():
+        base = a.lyrics[row].get("_tk")
+        allt = sorted(([base] if base else []) + tks, key=lambda t: t["x"])
+
+        def w_(t):
+            return t["h"] * (0.95 if any("\uac00" <= c <= "\ud7a3" for c in t["text"]) else 0.55 * len(t["text"]))
+        text = allt[0]["text"]
+        for p_, t in zip(allt, allt[1:]):
+            gap_ = (t["x"] - w_(t) / 2) - (p_["x"] + w_(p_) / 2)
+            text += (" " if gap_ > 0.45 * t["h"] else "") + t["text"]
+        x0 = allt[0]["x"] - w_(allt[0]) / 2
+        x1 = allt[-1]["x"] + w_(allt[-1]) / 2
+        a.lyrics[row].update({"text": text, "x": (x0 + x1) / 2})
+    for e in (x for v in by_line.values() for x in v):
+        for ly in e.lyrics.values():
+            ly.pop("_tk", None)
     return attached, missed
 
 

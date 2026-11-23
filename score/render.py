@@ -1027,7 +1027,8 @@ def _draw_system(d, sysL, header, F, ss, xoff, skip_header=False):
 
     # --- 박자표 (조표 오른쪽 / 첫 시스템, [v3.40] 원본이 줄 첫머리에 다시 찍은 줄) ---
     sys_ts = getattr(sysL, "time_sig", None)
-    if sysL.index == 0 or sys_ts:
+    no_ts = not header.get("time_sig_known", True)       # [v3.63] 원본에 박자표가 없으면(자유 리듬) 그리지 않는다
+    if (sysL.index == 0 and not no_ts) or sys_ts:
         # 조표가 없으면(다장조) 음자리표 바로 뒤에, 있으면 마지막 기호 뒤에 띄운다.
         last_acc = kx + max(0, n_acc - 1) * (key_gap if key_gap else acc_gap)
         tx = (last_acc + ss * 1.7) if n_acc else (clef_x + ss * 2.8)

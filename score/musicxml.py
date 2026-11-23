@@ -385,6 +385,15 @@ def score_to_element(score, title="악보 인식 결과"):
             # ---- 마디 머리 속성(조표·박자표·음자리표)
             key_now = score.fifths if mi == 0 else measure.key_change
             time_now = _time_at(score, measure)
+            free_ = not getattr(score, "time_sig_known", True) and not any(
+                getattr(mm, "time_sig_change", None) for mm in score.measures if mm.number <= measure.number)
+            if free_:
+                # [v3.63] 자유 리듬: 마디마다 실제 길이에 맞춘 '보이지 않는 박자표'(MuseScore 등이 마디 길이를
+                # 그대로 읽게). 8분음표 단위로, 안 되면 16분음표 단위로.
+                from .editing import free_capacity
+                q_ = free_capacity(measure)
+                time_now = (int(round(q_ * 2)), 8) if abs(q_ * 2 - round(q_ * 2)) < 1e-6 \
+                    else (max(1, int(round(q_ * 4))), 16)
             attr = None
 
             def _attr():
@@ -404,6 +413,8 @@ def score_to_element(score, title="악보 인식 결과"):
                     sym_ = score.ts_symbol
                 if sym_ in ("common", "cut") and tuple(time_now) == ((4, 4) if sym_ == "common" else (2, 2)):
                     t.set("symbol", sym_)
+                if free_:
+                    t.set("print-object", "no")
                 _sub(t, "beats", time_now[0])
                 _sub(t, "beat-type", time_now[1])
                 cur_time = time_now
