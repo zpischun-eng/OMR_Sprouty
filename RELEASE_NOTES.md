@@ -1,11 +1,12 @@
-## 콩나물지기 v3.80
+## 콩나물지기 v3.81
 
 **어떤 파일을 받나요?**
-- Windows: `Kongnamuljigi_v3.80_Setup.exe` (설치형 — 이전 버전 위에 그대로 설치) 또는 `OMRSprouty_v3_80_Windows.zip` (설치 없이 쓰는 폴더형)
-- 맥(M1 이후 Apple 칩): `OMRSprouty_v3_80_Mac_arm64.zip` · 맥(인텔): `OMRSprouty_v3_80_Mac_x86_64.zip`
+- Windows: `Kongnamuljigi_v3.81_Setup.exe` (설치형 — 이전 버전 위에 그대로 설치) 또는 `OMRSprouty_v3_81_Windows.zip` (설치 없이 쓰는 폴더형)
+- 맥(M1 이후 Apple 칩): `OMRSprouty_v3_81_Mac_arm64.zip` · 맥(인텔): `OMRSprouty_v3_81_Mac_x86_64.zip`
   — 처음 한 번 `처음 한 번 실행.command`를 오른쪽 클릭 → 열기
 
 **바뀐 점**
+- (3.81) 아이콘: 둥근 사각형 바깥을 투명하게 하고, 한글 이름 대신 "Sprouty"를 크게 넣었습니다.
 - 색으로 인쇄된 악보: 빨간 잉크 악보(인식 실패)와 색음표 악보(노랑·연두 머리를 놓침)를 인식 전에 검게 바꿔 읽습니다.
 - 박자표: PDF 글자 층에 박자표 숫자가 있으면 그대로 씁니다(Audiveris가 박자표 숫자를 음표로 읽던 문제 해결, 줄마다 바뀌는 3/8·4/8도 정확). 글자 층이 없고 Audiveris도 못 읽었으면 원본 그림에서 직접 찾습니다(12/8 등).
 - 인식 실패 뒤 다시 시도할 때 그림이 Audiveris 한도(2천만 화소)를 넘지 않게 했습니다.
