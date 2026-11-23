@@ -1467,3 +1467,92 @@ def find_hidden_voice_stems(score, gray, staff_groups, barlines=None):
                                     int(by + bh / 2 + 0.8 * il))})
     return out
 
+
+
+def fix_durations_by_ink(score, gray, staff_groups):
+    """[v3.62] 길이를 잘못 읽어 마디가 '넘침'인 곳을 원본 잉크로 확인해 고친다. 고친 뒤 그 마디가 정확히 맞을
+    때만 바꾼다(일괄 검증 — 가톨릭 성가 20곡에서 나온 Audiveris 오인식 유형).
+      ① 2분음표인데 머리 속이 꽉 찼다 → 4분음표 (덧줄이 머리를 가로지르는 낮은 C4 등을 빈 머리로 읽음, 54번 7마디)
+      ② 겹점인데 머리 오른쪽에 점이 하나뿐 → 점 하나 (붙임줄 끝을 점으로 읽음, 28번 13마디)
+      ③ 4분음표인데 기둥 끝 옆에 꼬리 잉크가 있다 → 8분음표 (꼬리가 코드 글자와 겹쳐 놓침, 308번 4마디)
+    반환: 알림 문구 목록."""
+    from score import editing as ed
+    H, W = gray.shape[:2]
+    fixed = []
+
+    def il_of(m, sn):
+        grp = staff_groups.get(m.system) or []
+        if sn - 1 < len(grp):
+            ys = grp[sn - 1]
+            return (ys[4] - ys[0]) / 4.0
+        return None
+
+    def dots_right(e, il):
+        x0, y0, w, h = e.src_bbox
+        cy = y0 + h / 2.0
+        xa, xb = int(x0 + w + 0.1 * il), int(min(W, x0 + w + 1.6 * il))
+        ya, yb = int(max(0, cy - 0.75 * il)), int(min(H, cy + 0.45 * il))
+        if xb - xa < 3 or yb - ya < 3:
+            return None
+        reg = (gray[ya:yb, xa:xb] < 140).astype(np.uint8)
+        n, _l, st, _c = cv2.connectedComponentsWithStats(reg, 8)
+        return sum(1 for j in range(1, n)
+                   if 0.15 * il <= st[j][2] <= 0.6 * il and 0.15 * il <= st[j][3] <= 0.6 * il
+                   and abs(st[j][2] - st[j][3]) <= 0.3 * il)
+
+    def flag_ink(e, il):
+        st_ = getattr(e, "src_stem", None)
+        if not st_:
+            return 0.0
+        sx, sy0, sy1 = st_
+        up = (e.src_bbox[1] + e.src_bbox[3] / 2.0) > (sy0 + sy1) / 2.0     # 머리가 아래 → 기둥 위
+        ty = sy0 if up else sy1
+        ya, yb = (int(ty), int(ty + 1.8 * il)) if up else (int(ty - 1.8 * il), int(ty))
+        xa, xb = int(sx + 0.15 * il), int(sx + 1.0 * il)
+        ya, yb, xa, xb = max(0, ya), min(H, yb), max(0, xa), min(W, xb)
+        if yb - ya < 3 or xb - xa < 3:
+            return 0.0
+        return float((gray[ya:yb, xa:xb] < 140).mean())
+
+    for m in score.measures:
+        st = ed.validate(score).get(m.number)
+        if not st or st[0] != "over":
+            continue
+        excess = st[1] - st[2]
+        notes = [e for e in m.elements if e.kind == "note" and not e.is_grace and e.src_bbox]
+        cands = []
+        for e in notes:
+            il = il_of(m, e.staff_no)
+            if not il:
+                continue
+            if e.duration_base == 2 and not e.in_triplet:
+                inner, _ring = _head_ink(gray, (e.src_bbox[0], e.src_bbox[1], e.src_bbox[0] + e.src_bbox[2],
+                                                e.src_bbox[1] + e.src_bbox[3]))
+                if inner >= 0.85:
+                    cands.append((e, "half_to_quarter"))
+            if getattr(e, "double_dot", False):
+                if dots_right(e, il) == 1:
+                    cands.append((e, "double_to_single"))
+            if e.duration_base == 4 and flag_ink(e, il) >= 0.22 and getattr(e, "beam_group", -1) == -1:
+                cands.append((e, "quarter_to_eighth"))
+        for e, kind in cands:
+            group = [x for x in m.elements if x is e or (getattr(e, "chord_group", -1) != -1
+                                                          and getattr(x, "chord_group", -2) == e.chord_group)]
+            saved = [(x, x.duration_base, x.dotted, getattr(x, "double_dot", False)) for x in group]
+            for x in group:
+                if kind == "half_to_quarter":
+                    x.duration_base = 4
+                elif kind == "double_to_single":
+                    x.double_dot = False
+                else:
+                    x.duration_base = 8
+            st2 = ed.validate(score).get(m.number)
+            if st2 and st2[0] in ("ok", "anacrusis", "time_change"):
+                label = {"half_to_quarter": "2분→4분(머리가 꽉 참)", "double_to_single": "겹점→점(점이 하나)",
+                         "quarter_to_eighth": "4분→8분(꼬리가 있음)"}[kind]
+                fixed.append(f"{m.number}마디 {label}")
+                break
+            for x, b, d, dd in saved:
+                x.duration_base, x.dotted, x.double_dot = b, d, dd
+        _ = excess
+    return [f"원본 잉크로 확인해 길이를 바로잡았습니다: {', '.join(fixed)}"] if fixed else []

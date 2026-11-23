@@ -339,6 +339,8 @@ def render(layout, orig_w, orig_h, F=3, selected=None, header_strips=None,
         seen_nums.add(m.number)
         if not getattr(m, "first_in_system", False) or m.number == 1:
             continue
+        if getattr(layout, "no_measure_numbers", False):
+            continue                     # [v3.62] 일괄 검증: 원본에 없는 편집기 표시는 빼고 비교
         sysL = next(s for s in layout.systems if s.index == m.system)
         nx = X(sysL.x_left) + ss * 0.3
         ny = Y(sysL.lines_y[0]) - ss * 1.3

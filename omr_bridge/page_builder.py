@@ -85,6 +85,7 @@ def build_page(doc, sheet: int = 1) -> PageModel:
         # 붙이는 경우까지 보도록 자동 보완 뒤에
         notes += ik.split_far_unisons(score, blobs)
         notes += ik.apply_orphan_flags(score, omr, sheet)   # [v2.56] 읽은 꼬리를 길이에(4분 → 8분 등)
+        notes += ik.fix_durations_by_ink(score, ik._gray(img, up), groups)   # [v3.62] 머리 속·점 수·꼬리로 길이 확인
         # [v2.70 P-1] 숨은 다른 성부 음(머리 반대쪽으로 설명 안 되는 기둥) → 표시 + 그 마디를 '쉼표 생략'으로 봐주지 않음
         hid = ik.find_hidden_voice_stems(score, ik._gray(img, up), groups, ctx.get("barlines"))
         for h in hid:

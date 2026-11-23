@@ -141,6 +141,7 @@ def extract_header_items(pdf_path, page_index, dpi, crop_x0, crop_y0,
 
 
 # 가사 줄에 섞여 들어올 수 있는 악보 지시어(가사 아님) — 소문자 비교
+_NAV_WORDS = {"fine", "d.c", "d.s", "coda", "segno", "d.c. al fine", "d.s. al fine"}
 _NON_LYRIC_WORDS = {"fine", "d.s.", "d.c.", "al", "coda", "segno", "d.s", "d.c", "to",
                     # 셈여림·빠르기 등(가사 자리에 글자로 들어 있는 경우) — 가사가 아님
                     "p", "pp", "ppp", "mp", "mf", "f", "ff", "fff", "sf", "sfz", "fp",
@@ -292,15 +293,27 @@ def extract_lyric_tokens(pdf_path, page_index, dpi, crop_x0, crop_y0, staves, in
         if nxt_top is not None:
             hi = min(hi, nxt_top - margin)
         zone = [c for c in chars if lo < (c[0] + c[1]) / 2 < hi]
+        # [v3.62] 마침표·쉼표 같은 작은 글자는 줄을 새로 만들지 않고 가장 가까운 줄에 붙인다.
+        # (실사용: 성가 "1.불"의 '.'이 글자 아래쪽에 있어 혼자 한 줄(절)이 되고, 그 줄의 '.'이 첫 음의 가사로
+        #  들어가 '불'이 밀려났다 — 절 줄 수도 하나씩 늘어났다)
+        small = [c for c in zone if (c[1] - c[0]) < 0.35 * il]
         rows = []
-        for c in sorted(zone, key=lambda c: (c[0] + c[1]) / 2):
+        for c in sorted((c for c in zone if (c[1] - c[0]) >= 0.35 * il), key=lambda c: (c[0] + c[1]) / 2):
             cy = (c[0] + c[1]) / 2
             for rw in rows:
                 if abs(rw["cy"] - cy) < 0.7 * il:
                     rw["c"].append(c)
+                    rw["cy"] = sum((k[0] + k[1]) / 2 for k in rw["c"]) / len(rw["c"])
                     break
             else:
                 rows.append({"cy": cy, "c": [c]})
+        for c in small:
+            if not rows:
+                break
+            cy = (c[0] + c[1]) / 2
+            rw = min(rows, key=lambda r: abs(r["cy"] - cy))
+            if abs(rw["cy"] - cy) < 1.0 * il:
+                rw["c"].append(c)
         ri = 0
         for rw in sorted(rows, key=lambda r: r["cy"]):
             cs = sorted(rw["c"], key=lambda c: c[2])
@@ -317,12 +330,22 @@ def extract_lyric_tokens(pdf_path, page_index, dpi, crop_x0, crop_y0, staves, in
                 else:
                     words.append([c])
             row_tokens = []
+            verse_left = None
             for w in words:
                 text = "".join(c[4] for c in w)
-                if text.lower() in _NON_LYRIC_WORDS or re.fullmatch(r"\d+[.)]?", text):
-                    continue                     # 절 번호(1. 2.)·셈여림 글자 등은 가사가 아님
+                if re.fullmatch(r"\d+[.)]?", text):
+                    verse_left = w[0][2]         # 절 번호(1. 2.)는 가사가 아님 — 바로 뒤 음절과 한 덩어리로 놓인다
+                    continue
+                if text.lower() in _NON_LYRIC_WORDS:
+                    continue                     # 셈여림 글자 등
+                x_ = (w[0][2] + w[-1][3]) / 2
+                if verse_left is not None:
+                    # [v3.62] "1.불"처럼 절 번호 뒤 첫 음절은 '절 번호+음절' 전체가 음표 아래 가운데에 온다
+                    # (음절만의 가운데는 음표에서 1.6칸 넘게 오른쪽이라 붙지 못하고 빠졌다)
+                    x_ = (verse_left + w[-1][3]) / 2
+                    verse_left = None
                 row_tokens.append({"text": "-" if text == "―" else text,
-                                   "x": (w[0][2] + w[-1][3]) / 2, "y": rw["cy"], "h": h,
+                                   "x": x_, "y": rw["cy"], "h": h,
                                    "line": line_idx, "staff": staff_no, "row": ri})
             if row_tokens:
                 tokens.extend(row_tokens)
@@ -348,13 +371,37 @@ def extract_other_text(pdf_path, page_index, dpi, crop_x0, crop_y0, header_limit
         iy = max(0.0, min(c[1], b[3]) - max(c[0], b[1]))
         return ix * iy > 0.3 * max(1.0, (c[3] - c[2]) * (c[1] - c[0]))
 
+    # [v3.62] 가사 자리에 있어도 이동 기호 낱말(Fine·D.C.·D.S.·Coda…)은 가사가 아니다 — 가사에서도 빼고
+    # 여기서도 빼면 아예 사라졌다(실사용: 성가 308번 가사 줄 높이의 "Fine")
+    rescue = set()
+    lines_ = []
+    for i in sorted(range(len(chars)), key=lambda i: (chars[i][0] + chars[i][1]) / 2):
+        c = chars[i]
+        for ln in lines_:
+            if c[0] < ln[1] and c[1] > ln[0]:
+                ln[2].append(i)
+                ln[0], ln[1] = min(ln[0], c[0]), max(ln[1], c[1])
+                break
+        else:
+            lines_.append([c[0], c[1], [i]])
+    for _t, _b, idx in lines_:
+        word = []
+        for i in sorted(idx, key=lambda i: chars[i][2]) + [None]:
+            if i is not None and word:
+                p_, c = chars[word[-1]], chars[i]
+                if -0.4 * max(1.0, p_[1] - p_[0]) <= c[2] - p_[3] < 0.35 * max(1.0, p_[1] - p_[0]) and not _is_hangul(c[4]):
+                    word.append(i)
+                    continue
+            if word and "".join(chars[k][4] for k in word).lower().strip(".") in _NAV_WORDS:
+                rescue.update(word)
+            word = [i] if (i is not None and not _is_hangul(chars[i][4])) else []
     keep = []
-    for c in chars:
+    for ci, c in enumerate(chars):
         cy = (c[0] + c[1]) / 2
         if c[1] < header_limit_y:
             continue
         in_lyric = any(lo < cy < hi and c[2] >= xl for lo, hi, xl in lyric_zones)
-        if in_lyric and not re.fullmatch(r"[\d.)]", c[4]):
+        if in_lyric and not re.fullmatch(r"[\d.)]", c[4]) and ci not in rescue:
             continue                          # 가사(음표에 붙여 그림) — 보표 시작선 왼쪽 글자(악기 이름)는 제외 안 함
         if any(_hit(c, b) for b in exclude_boxes):
             continue

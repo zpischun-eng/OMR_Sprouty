@@ -30,7 +30,7 @@ import cv2
 import numpy as np
 
 EXTS = (".pdf", ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
-VERIFY_VERSION = "2"                    # 비교 방법이 바뀌면 올린다(예전 items 결과를 다시 계산)
+VERIFY_VERSION = "3"                    # 비교 방법이 바뀌면 올린다(예전 items 결과를 다시 계산)
 GOOD = ("ok", "anacrusis", "time_change")
 
 # 유형(내부 키) → 보고서 문구
@@ -131,6 +131,7 @@ def load_pages(path, progress=None, timeout_sec=900):
             for i, p in enumerate(st.pages):
                 w, h = st.page_sizes[i]
                 pv = sl.page_view(lay, p.dy_orig)
+                pv.no_measure_numbers = True
                 img, lm = sr.render(pv, w, h, F=1, return_margin=True, lyric_y_off=p.dy_orig)
                 ren = np.array(img.convert("L").crop((lm, 0, lm + w, h)))
                 orig = _gray(job.page_image(i + 1))
@@ -150,6 +151,7 @@ def load_pages(path, progress=None, timeout_sec=900):
                                 staff_groups=pm.staff_groups, staff_left_by_line=pm.staff_left,
                                 staff_clefs=pm.staff_clefs, staff_parts=pm.staff_parts)
     lay.header_items = pm.header_items
+    lay.no_measure_numbers = True
     oh, ow = doc.stacked_bgr.shape[:2]
     img, lm = sr.render(lay, ow, oh, F=1, return_margin=True)
     ren = np.array(img.convert("L").crop((lm, 0, lm + ow, oh)))
@@ -217,6 +219,45 @@ def _find_text(miss, staves, il):
     if keep:
         text = np.isin(lab, list(keep))
     return text
+
+
+def _text_bands(ink, staves, il):
+    """잉크에서 글자 줄 띠(부울 마스크). 오선 밖에서 글자만 한 조각이 같은 높이에 5개 이상, 6칸 넘게 늘어서 있고
+    속이 덜 찬(음표 머리처럼 꽉 찬 타원이 아닌 — 덧줄 음표 줄을 글자로 오인하지 않게) 줄."""
+    h, w = ink.shape
+    n, lab, st, _c = cv2.connectedComponentsWithStats(ink.astype(np.uint8), 8)
+    cand = []
+    for j in range(1, n):
+        x, y, cw, ch, a = st[j]
+        if not (0.45 * il <= ch <= 3.0 * il and 0.15 * il <= cw <= 4.0 * il and a >= 0.06 * il * il):
+            continue
+        cy = y + ch / 2.0
+        if any(top - 0.6 * il <= cy <= bot + 0.6 * il for _l, top, bot in staves):
+            continue
+        cand.append((cy, x, x + cw, y, y + ch, a / float(cw * ch)))
+    band = np.zeros((h, w), bool)
+    if not cand:
+        return band
+    cand.sort()
+    rows, cur = [], [cand[0]]
+    for c in cand[1:]:
+        if c[0] - cur[-1][0] <= 0.7 * il:
+            cur.append(c)
+        else:
+            rows.append(cur)
+            cur = [c]
+    rows.append(cur)
+    pad = int(0.5 * il)
+    for r in rows:
+        x0, x1 = min(c[1] for c in r), max(c[2] for c in r)
+        fills = sorted(c[5] for c in r)
+        if len(r) < 5 or x1 - x0 < 6 * il or fills[len(fills) // 2] >= 0.6:
+            continue
+        # 줄을 이루는 글자들의 x 범위만(띄엄띄엄 있는 코드 이름 사이의 음표까지 덮지 않게): 글자 주변만
+        y0, y1 = max(0, int(min(c[3] for c in r) - pad)), min(h, int(max(c[4] for c in r) + pad))
+        for c in r:
+            band[y0:y1, max(0, int(c[1] - 1.2 * il)):min(w, int(c[2] + 1.2 * il))] = True
+    return band
 
 
 def _cancel_shifted_stems(a, b, miss, extra, il):
@@ -292,12 +333,15 @@ def diff_page(pd):
     miss = cv2.morphologyEx(miss.astype(np.uint8), cv2.MORPH_OPEN, op) > 0
     extra = cv2.morphologyEx(extra.astype(np.uint8), cv2.MORPH_OPEN, op) > 0
     outside = _outside_music(a, pd.staves, il)
-    text = _find_text(miss, pd.staves, il) | (miss & outside)
-    miss_m = miss & ~text
-    # [검증 2판] 편집 악보 쪽 글자(제목·가사·코드 이름을 다른 글꼴·위치로 그린 것)도 같은 기준으로 뺀다
-    text_r = _find_text(extra, pd.staves, il) | (extra & outside)
+    # [검증 3판] 글자 줄(가사·코드 이름)을 차이가 아니라 원본·편집 악보 '전체 잉크'에서 찾아 그 띠 안의 차이를
+    # 모두 글자로 본다. 2판은 차이 조각에서 찾아, 글꼴이 달라 조금씩 어긋난 글자 조각(5개 미만)이 남아
+    # 성가 20곡의 '덩어리'의 대부분이 글자였다.
+    band = _text_bands(a, pd.staves, il) | _text_bands(b, pd.staves, il)
+    text_m = _find_text(miss, pd.staves, il) | (miss & (outside | band))
+    text_r = _find_text(extra, pd.staves, il) | (extra & (outside | band))
+    miss_m = miss & ~text_m
     extra = extra & ~text_r
-    text = text | text_r
+    text = text_m | text_r
     union = (miss_m | extra).astype(np.uint8)
     km = max(3, int(round(il * 0.6))) | 1
     merged = cv2.dilate(union, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (km, km)))
