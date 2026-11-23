@@ -92,7 +92,11 @@ class PageData:
 
 
 def _gray(bgr):
-    return cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY) if bgr.ndim == 3 else bgr
+    if bgr.ndim != 3:
+        return bgr
+    from omr_bridge.ink_prep import ink_gray, has_color
+    # 색 잉크(색음표·빨간 악보)는 인식 때와 같은 기준으로 검게 — 안 그러면 밝은 색 머리가 '원본에 없음'이 된다
+    return ink_gray(bgr) if has_color(bgr) else cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
 
 
 def _staves_from_groups(groups, sy, dy=0.0, h=None):

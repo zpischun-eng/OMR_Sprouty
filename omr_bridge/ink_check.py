@@ -1567,3 +1567,72 @@ def fix_durations_by_ink(score, gray, staff_groups):
                 x.duration_base, x.dotted, x.double_dot = b, d, dd
         _ = excess
     return [f"원본 잉크로 확인해 길이를 바로잡았습니다: {', '.join(fixed)}"] if fixed else []
+
+
+def detect_time_signature(score, gray, staff_groups):
+    """[v3.80] Audiveris가 박자표를 읽지 못했을 때 원본 그림에서 직접 찾는다(붓의 박자표 비교와 같은 방법).
+    첫 줄 첫 보표에서 첫 음표 바로 왼쪽의 잉크 덩어리를 오선을 지우고 박자표 모양(C·₵·숫자 12가지)과 비교한다.
+    실사용: 교과서 '아름다운 나라'의 12/8을 놓쳐 박자표 없이 그렸다. 반환 (beats, beat_type, symbol) 또는 None."""
+    from omr_bridge import brush
+    ms = sorted(score.measures, key=lambda m: m.number)
+    if not ms:
+        return None
+    line = ms[0].system
+    grp = staff_groups.get(line) or []
+    if not grp:
+        return None
+    ys = grp[0]
+    il = (ys[4] - ys[0]) / 4.0
+    firsts = [e.src_bbox[0] for m in ms if m.system == line for e in m.elements if e.src_bbox and e.staff_no == 1]
+    if not firsts:
+        return None
+    H, W = gray.shape[:2]
+    xb = int(max(0, min(firsts) - 0.4 * il))
+    xa = int(max(0, xb - 7.0 * il))
+    ya, yb = int(max(0, ys[0] - 0.3 * il)), int(min(H, ys[4] + 0.3 * il))
+    if xb - xa < 2 * il:
+        return None
+    ink = (gray[ya:yb, xa:xb] < 140).astype(np.uint8)
+    hw = max(1, int(round(il * 0.12)))
+    for ly in ys:                                          # 오선 지우기 + 세로로 잇기(붓과 같은 처리)
+        r = int(round(ly - ya))
+        ink[max(0, r - hw):r + hw + 1, :] = 0
+    ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(3, int(il * 0.3)))))
+    cols = ink.any(axis=0)
+    # 오른쪽부터: 0.3칸 이상 빈 틈으로 나뉜 잉크 덩어리들
+    runs, x = [], len(cols) - 1
+    gap = max(2, int(0.3 * il))
+    while x >= 0:
+        if cols[x]:
+            x1 = x
+            miss = 0
+            while x >= 0 and miss < gap:
+                miss = 0 if cols[x] else miss + 1
+                x -= 1
+            runs.append((x + miss + 1, x1 + 1))
+        else:
+            x -= 1
+    best = None
+    for x0, x1 in runs[:3]:                                # 음표에 가까운 것부터 세 덩어리까지
+        sub = ink[:, x0:x1] > 0
+        yy, xx = np.nonzero(sub)
+        if len(xx) < 10:
+            continue
+        crop = sub[yy.min():yy.max() + 1, xx.min():xx.max() + 1]
+        sc = brush.match_timesigs(crop, il)
+        if not sc:
+            continue
+        k, v = max(sc.items(), key=lambda kv: kv[1])
+        if v >= 0.78 and (best is None or v > best[1]):
+            best = (k, v)
+        if best:
+            break
+    if best is None:
+        return None
+    k = best[0]
+    if k == "ts:common":
+        return 4, 4, "common"
+    if k == "ts:cut":
+        return 2, 2, "cut"
+    b, bt = brush.TIMESIGS[k]
+    return b, bt, None

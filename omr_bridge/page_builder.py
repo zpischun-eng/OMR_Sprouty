@@ -43,18 +43,35 @@ def build_page(doc, sheet: int = 1) -> PageModel:
     score.header_x = dict(ctx.get("header_x") or {})     # [v2.30] 줄 머리 기호 원본 x
     il = ctx["staves"][1] - ctx["staves"][0] if len(ctx.get("staves") or []) > 1 else 20.0
     rec_ = ctx.get("recognition") or {}
+    pdf_ts = apply_pdf_time_signatures(score, ctx.get("pdf_time_sigs") or [], ctx.get("staff_groups") or {},
+                                       barlines, il)
+    if pdf_ts:
+        notes.append("PDF 글자 층의 박자표를 그대로 썼습니다: " + ", ".join(pdf_ts[:8]) + (" …" if len(pdf_ts) > 8 else ""))
+    if not getattr(score, "time_sig_known", True):
+        # [v3.80] Audiveris가 박자표를 못 읽었으면 원본 그림에서 직접 찾아본다
+        try:
+            from omr_bridge import ink_check as _ik
+            det = _ik.detect_time_signature(score, _ik._gray(img, ctx.get("_upscale_factor") or 1.0),
+                                            ctx.get("staff_groups") or {})
+        except Exception:
+            det = None
+        if det:
+            score.beats, score.beat_type, score.ts_symbol, score.time_sig_known = det[0], det[1], det[2], True
+            first_ = min(score.measures, key=lambda m: m.number)
+            first_.ts_printed = det
+            notes.append(f"인식되지 않은 박자표를 원본 그림에서 찾았습니다: {det[0]}/{det[1]}")
     if not getattr(score, "time_sig_known", True):
         imp = ed.infer_implied_meter(score)            # [v3.63] 박자표 없음: 숨은 박자 또는 자유 리듬
         notes.append(f"원본에 박자표가 없습니다 — 마디 길이가 대부분 {imp:g}박이라 그 길이로 검사합니다" if imp else
                      "원본에 박자표가 없습니다 — 마디마다 길이가 달라 자유 리듬(그레고리오 성가 등)으로 보고 "
                      "박자 검사를 하지 않습니다")
-    ts_added = ed.infer_missed_time_changes(score, rec_.get("time_printed") or {})
+    ts_added = [] if pdf_ts else ed.infer_missed_time_changes(score, rec_.get("time_printed") or {})
     # [v3.40] 원본에 찍힌 박자표를 마디에 기억 — 줄 첫머리에 다시 찍힌 박자표(값이 같아도)를 원본처럼 그리고,
     # C·₵ 기호면 숫자 대신 기호로
     syms_ = rec_.get("time_symbols") or {}
     for m_ in score.measures:
         pv = (rec_.get("time_printed") or {}).get(m_.number)
-        if pv is not None:
+        if pv is not None and not (pdf_ts and getattr(m_, "ts_printed", None)):
             m_.ts_printed = (pv[0], pv[1], syms_.get(m_.number))
     if ts_added:
         notes.append("인식되지 않은 박자표를 마디 길이로 찾아 넣었습니다: " +
@@ -171,6 +188,71 @@ def build_page(doc, sheet: int = 1) -> PageModel:
         staff_parts=dict(ctx.get("staff_parts") or {}),
         sx=ow / cw, sy=oh / ch, warnings=list(doc.warnings or []))
 
+
+
+def apply_pdf_time_signatures(score, sigs, staff_groups, barlines, il):
+    """[v3.80] PDF 글자 층에서 읽은 박자표(원본 그 자체)를 마디에 넣는다.
+      · 박자표 자리의 마디(그 줄에서 박자표보다 오른쪽에 요소가 있는 첫 마디)에 둔다.
+      · 그 자리에 겹친 음표는 박자표 숫자를 음표로 잘못 읽은 것 → 지운다(성가 324번: 4/8을 2분음표 화음으로).
+      · 곡 첫 마디면 곡 박자, 앞과 값이 다르면 박자 바뀜, 같으면 다시 찍은 것(ts_printed만).
+    반환: 알림용 문구 목록(넣은 것이 없으면 빈 목록)."""
+    if not sigs or not score.measures:
+        return []
+    placed = {}
+    for sg in sigs:
+        cy = (sg["y0"] + sg["y1"]) / 2.0
+        line = None
+        for ln, grp in staff_groups.items():
+            for k, ys in enumerate(grp):
+                if ys[0] - 0.5 * il <= cy <= ys[-1] + 0.5 * il:
+                    line = (ln, k + 1)
+        if line is None:
+            continue
+        ln, sn = line
+        ms = sorted((m for m in score.measures if m.system == ln), key=lambda m: m.number)
+        bars = sorted(barlines.get(ln, []) or [])
+        target = None
+        for i, m in enumerate(ms):
+            right = bars[i] if i < len(bars) else 1e12       # 이 마디의 오른쪽 세로줄
+            if right > sg["x1"]:
+                target = m
+                break
+        if target is None:
+            continue
+        # 박자표 숫자를 음표로 읽은 것 지우기(그 보표, 박자표 폭 안)
+        before = len(target.elements)
+        target.elements[:] = [e for e in target.elements
+                              if not (e.kind == "note" and e.src_bbox and e.staff_no == sn
+                                      and sg["x0"] - 0.4 * il <= e.src_bbox[0] + e.src_bbox[2] / 2.0 <= sg["x1"] + 0.4 * il)]
+        placed.setdefault(target.number, (target, sg["beats"], sg["beat_type"], before - len(target.elements)))
+    if not placed:
+        return []
+    ms_all = sorted(score.measures, key=lambda m: m.number)
+    out = []
+    # 곡 박자: 첫 마디에 있으면 그것, 없으면 인식된 것을 유지
+    first = ms_all[0]
+    cur = (score.beats, score.beat_type) if getattr(score, "time_sig_known", True) else None
+    for m in ms_all:
+        if m.number in placed:
+            _m, b, bt, removed = placed[m.number]
+            m.ts_printed = (b, bt, None)
+            if m is first:
+                score.beats, score.beat_type, score.time_sig_known = b, bt, True
+                score.ts_symbol = None
+                m.time_sig_change = None
+            else:
+                m.time_sig_change = (b, bt) if cur != (b, bt) else None
+                if cur is None:                          # 첫 마디 박자를 몰랐다 → 이 박자표가 처음
+                    m.time_sig_change = (b, bt)
+            cur = (b, bt)
+            out.append(f"{m.number}마디 {b}/{bt}" + (f"(숫자를 음표로 읽은 {removed}개 지움)" if removed else ""))
+        elif getattr(m, "time_sig_change", None):
+            if tuple(m.time_sig_change) == cur:
+                m.time_sig_change = None
+            else:
+                cur = tuple(m.time_sig_change)
+        m.target_capacity = None if m.number >= min(placed) else m.target_capacity
+    return out
 
 
 def attach_pdf_chords(score, text_items, staff_groups, il):

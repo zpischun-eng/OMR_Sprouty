@@ -154,7 +154,8 @@ def _retry_scaled(image_path: str, work_dir: Path):
     4배(1억 7천만 화소)로 키우다가 메모리가 모자라 죽거나(MemoryError), 키운 그림을 Audiveris가 감당하지
     못했다(실사용: 가톨릭 성가 20곡 중 14곡 실패).
       · 큰 그림(600만 화소 이상) → 해상도 부족이 아니다. 메모리 부담을 줄이려 0.75배로 줄여 다시 시도.
-      · 작은 그림 → 키우되 결과가 4천만 화소를 넘지 않게(최대 4배). 1.25배도 못 키우면 그대로 다시.
+      · 작은 그림 → 키우되 결과가 1천9백만 화소를 넘지 않게(최대 4배 — Audiveris 한도 2천만). 1.25배도 못
+        키우면 그대로 다시.
     """
     import math
     with Image.open(image_path) as im:
@@ -163,7 +164,7 @@ def _retry_scaled(image_path: str, work_dir: Path):
         if px >= 6e6:
             factor = 0.75
         else:
-            factor = min(4.0, math.sqrt(40e6 / max(1.0, px)))
+            factor = min(4.0, math.sqrt(19e6 / max(1.0, px)))   # Audiveris는 2천만 화소가 넘는 그림을 거부한다
             if factor < 1.25:
                 return image_path, 1.0
             factor = float(int(factor * 4) / 4.0)            # 0.25 단위(좌표 환산 오차를 줄인다)
@@ -293,6 +294,11 @@ def run_single(source_path: str, output_dir: str, timeout_sec: int = 180) -> Aud
     out_dir.mkdir(parents=True, exist_ok=True)
     work_dir = out_dir / "_work"
     work_dir.mkdir(exist_ok=True)
+
+    # [v3.80] 색 잉크(빨간 악보·색음표)는 검게 바꾼 사본으로 인식한다(화면의 원본 그림은 그대로)
+    if not source_path.lower().endswith(".pdf"):
+        from omr_bridge.ink_prep import prepare_for_omr
+        source_path = prepare_for_omr(source_path, work_dir)
 
     # 1차 시도: 원본 그대로(PDF는 항상, 이미지도 우선 원본으로)
     ok, mxl_path, omr_path, log_path = _run_audiveris_once(

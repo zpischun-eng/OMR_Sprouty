@@ -41,7 +41,7 @@ def n_pdf_pages(pdf_path: str) -> int:
 # [v2.53] 책 캐시 판(版). 예전엔 열쇠가 PDF 내용뿐이라, 처음 인식한 결과(그때 프로그램·그때 실행 상태
 # 그대로)를 영원히 다시 썼다 — 한 페이지 캐시는 CACHE_VERSION이 바뀌면 무효가 되는데 책은 그렇지 않았다.
 # 인식 방식(장 처리·자르기·내보내기)이 바뀌면 올린다.
-BOOK_CACHE_VERSION = "book-r2"
+BOOK_CACHE_VERSION = "book-r3"   # r3: [v3.80] 색 잉크 전처리
 
 
 class BookJob:
@@ -74,7 +74,11 @@ class BookJob:
         doc = pdfium.PdfDocument(str(self.pdf))
         crops, frames = [], []
         for i in range(self.n_pages):
-            pil = doc[i].render(scale=PDF_DPI / 72.0).to_pil().convert("L")
+            pil = doc[i].render(scale=PDF_DPI / 72.0).to_pil()
+            from omr_bridge.ink_prep import ink_gray, has_color
+            arr_ = np.array(pil.convert("RGB"))
+            # [v3.80] 색 잉크(빨간 악보·색음표)는 검게 — 그냥 회색으로 바꾸면 밝은 색 머리가 사라진다
+            pil = Image.fromarray(ink_gray(arr_)) if has_color(arr_) else pil.convert("L")
             arr = np.array(pil)
             rows = np.where(arr.min(axis=1) < 200)[0]
             cols = np.where(arr.min(axis=0) < 200)[0]

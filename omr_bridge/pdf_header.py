@@ -155,7 +155,7 @@ _MUSIC_FONT_RE = re.compile(r"opus|maestro|petrucci|sonata|jazz|engraver|broadwa
                             r"norfolk|scoring|golden\s*age|fughetta|vivace|musisync|seville", re.I)
 
 
-def _pdf_chars(pdf_path, page_index, dpi, crop_x0, crop_y0, music_marks=None):
+def _pdf_chars(pdf_path, page_index, dpi, crop_x0, crop_y0, music_marks=None, music_digits=None):
     """PDF 글자 목록 [(top, bottom, left, right, char, 앞에_띄어쓰기, 굵게)] (크롭 이미지 픽셀 좌표).
 
     PDF마다 텍스트를 넣는 단위가 다르다(교가=글자 하나씩, 교과서 PDF=단어 단위 + 크기 0인
@@ -248,6 +248,10 @@ def _pdf_chars(pdf_path, page_index, dpi, crop_x0, crop_y0, music_marks=None):
                 l, b, r, t = tp.get_charbox(i)
                 music_marks.append(((page_h - t) * scale - crop_y0, (page_h - b) * scale - crop_y0,
                                     l * scale - crop_x0, r * scale - crop_x0, kind))
+        if music_digits is not None and in_music_font and ch.isdigit() and _visible(i):
+            l, b, r, t = tp.get_charbox(i, loose=False)      # [v3.80] 악보 글꼴의 숫자 = 박자표 숫자
+            music_digits.append(((page_h - t) * scale - crop_y0, (page_h - b) * scale - crop_y0,
+                                 l * scale - crop_x0, r * scale - crop_x0, ch))
         if not is_text or in_music_font or not _visible(i):
             continue
         l, b, r, t = tp.get_charbox(i)
@@ -451,3 +455,50 @@ def extract_other_text(pdf_path, page_index, dpi, crop_x0, crop_y0, header_limit
                           "h": max(c[1] - c[0] for c in run),
                           "bold": sum(1 for c in run if c[6]) * 2 > len(run)})
     return items
+
+
+def extract_time_signatures(pdf_path, page_index, dpi, crop_x0, crop_y0):
+    """[v3.80] PDF 글자 층에서 박자표를 읽는다 — 악보 글꼴(NoteWorthy 등)로 찍은 숫자가 위·아래로 쌓인 것.
+    그림을 인식하는 Audiveris는 이 숫자를 2분음표 화음으로 잘못 읽기도 한다(성가 324번: 줄마다 3/8·4/8이
+    바뀌는데 모두 음표로 읽혀 마디가 넘쳤다). 글자 층은 원본 그 자체라 틀릴 일이 없다.
+    반환: [{"beats", "beat_type", "x0", "x1", "y0", "y1"}] (인식 좌표)."""
+    digs = []
+    _pdf_chars(pdf_path, page_index, dpi, crop_x0, crop_y0, music_digits=digs)
+    if len(digs) < 2:
+        return []
+    # 가로로 붙은 숫자를 한 수로(12 등)
+    nums = []
+    for d in sorted(digs, key=lambda d: (round((d[0] + d[1]) / 2 / max(1.0, (d[1] - d[0]) * 0.5)), d[2])):
+        h = max(1.0, d[1] - d[0])
+        if nums and abs((nums[-1]["y0"] + nums[-1]["y1"]) / 2 - (d[0] + d[1]) / 2) < 0.3 * h \
+                and -0.2 * h <= d[2] - nums[-1]["x1"] < 0.5 * h:
+            nums[-1]["text"] += d[4]
+            nums[-1]["x1"] = d[3]
+        else:
+            nums.append({"text": d[4], "y0": d[0], "y1": d[1], "x0": d[2], "x1": d[3]})
+    out, used = [], set()
+    for i, a in enumerate(nums):
+        if i in used:
+            continue
+        h = max(1.0, a["y1"] - a["y0"])
+        best = None
+        for j, b in enumerate(nums):
+            if j == i or j in used:
+                continue
+            dx = abs((a["x0"] + a["x1"]) / 2 - (b["x0"] + b["x1"]) / 2)
+            dy = b["y0"] - a["y0"]                       # b가 아래
+            if dx < 0.8 * h and 0.7 * h <= dy <= 1.6 * h and (best is None or dx < best[0]):
+                best = (dx, j)
+        if best is None:
+            continue
+        b = nums[best[1]]
+        try:
+            beats, bt = int(a["text"]), int(b["text"])
+        except ValueError:
+            continue
+        if bt not in (1, 2, 4, 8, 16) or not (1 <= beats <= 24):
+            continue
+        used.update((i, best[1]))
+        out.append({"beats": beats, "beat_type": bt, "x0": min(a["x0"], b["x0"]), "x1": max(a["x1"], b["x1"]),
+                    "y0": a["y0"], "y1": b["y1"]})
+    return out

@@ -144,6 +144,17 @@ def _cache_key(image_path: str) -> str:
     with open(image_path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
+    # [v3.80] 색 있는 그림은 인식 전처리(색 잉크 → 검정)가 바뀌었으므로 예전 결과를 다시 쓰지 않는다
+    # (흑백 그림의 캐시·함께 넣은 데모 캐시는 그대로 유효)
+    try:
+        import cv2
+        import numpy as np
+        from omr_bridge.ink_prep import has_color
+        img = cv2.imdecode(np.fromfile(image_path, np.uint8), cv2.IMREAD_COLOR)
+        if img is not None and has_color(img):
+            h.update(b"+ink1")
+    except Exception:
+        pass
     return h.hexdigest()[:24]
 
 
@@ -204,6 +215,15 @@ def attach_pdf_text(ctx, pdf_meta, pdf_page_warnings):
             ctx["header_items"] = []   # 곡 정보는 부가 기능 — 실패해도 인식 결과는 정상 제공
     # [가사 — PDF 인식분만] 각 시스템(줄) 오선 아래 글자를 절별 토큰으로 뽑는다.
     # 음표에 붙이는 일은 Score가 만들어진 뒤 편집기에서 한다(model.attach_lyrics).
+    # [v3.80] 박자표: 악보 글꼴로 찍힌 숫자가 글자 층에 있으면 그대로 읽는다(그림 인식보다 정확)
+    ctx["pdf_time_sigs"] = []
+    if pdf_meta and ctx["staves"]:
+        try:
+            from omr_bridge.pdf_header import extract_time_signatures
+            ctx["pdf_time_sigs"] = extract_time_signatures(
+                pdf_meta["pdf"], pdf_meta["page"], pdf_meta["dpi"], pdf_meta["x0"], pdf_meta["y0"])
+        except Exception:
+            ctx["pdf_time_sigs"] = []
     ctx["lyric_tokens"] = []
     if pdf_meta and ctx["staves"]:
         try:
