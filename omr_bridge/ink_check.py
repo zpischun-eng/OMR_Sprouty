@@ -1514,7 +1514,18 @@ def fix_durations_by_ink(score, gray, staff_groups):
             return 0.0
         return float((gray[ya:yb, xa:xb] < 140).mean())
 
+    free = not getattr(score, "time_sig_known", True) and not getattr(score, "implied_capacity", None)
     for m in score.measures:
+        if free:
+            # [v3.71] 자유 리듬(박자표 없음)은 마디 길이로 검사할 수 없다 → 머리 속이 확실히 꽉 찬 2분음표만 4분으로
+            for e in m.elements:
+                if e.kind == "note" and not e.is_grace and e.src_bbox and e.duration_base == 2:
+                    inner, _r = _head_ink(gray, (e.src_bbox[0], e.src_bbox[1], e.src_bbox[0] + e.src_bbox[2],
+                                                 e.src_bbox[1] + e.src_bbox[3]))
+                    if inner >= 0.92:
+                        e.duration_base = 4
+                        fixed.append(f"{m.number}마디 2분→4분(머리가 꽉 참)")
+            continue
         st = ed.validate(score).get(m.number)
         if not st or st[0] != "over":
             continue

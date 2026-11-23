@@ -697,6 +697,8 @@ def attach_lyrics(score, tokens, interline):
             leftover.append(prev["_tk"])
         best.lyrics[tk["row"]] = {"text": tk["text"], "x": tk["x"], "y": tk["y"],
                                   "h": tk["h"], "d": best_d, "_tk": tk}
+        if tk.get("hdy") is not None:
+            best.lyrics[tk["row"]].update(hdy=tk["hdy"], hw=tk.get("hw"))
         attached += 1
     # [v3.63] 낭송음(그레고리오 성가의 온음표 하나에 여러 낱말 — "그리스도와 함께 다시 살게 되었으니"):
     # 붙지 못한 음절이 온음표(또는 다음 음까지 6칸 넘게 빈 음) 오른쪽 빈자리에 있으면 그 음의 가사에 이어 붙인다.

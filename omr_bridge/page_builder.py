@@ -177,10 +177,37 @@ def attach_pdf_chords(score, text_items, staff_groups, il):
     """[v3.00] PDF 글자(원본 자리) 중 코드 이름을 그 아래 보표의 가장 가까운 음에 붙인다.
     조건: 코드 문법(근음 대문자) + 어떤 보표 맨 윗줄보다 0.3~6칸 위. 반환: (남은 글자들, 붙인 수)."""
     from score import chords as _ch
+    import re as _re
+    # [v3.71] "A7 D D.C."처럼 코드 이름과 이동 기호(D.C.·Fine…)가 한 줄로 붙어 읽힌 글자는 낱말로 쪼갠다
+    # (통째로는 코드 문법이 아니라서 코드가 글자로만 남고 코드 이름 기능(조옮김·반주)에서 빠졌다)
+    nav_re = _re.compile(r"^(d\.?c\.?|d\.?s\.?|fine|coda|al|to|segno)$", _re.I)
+    split_items = []
+    for it in text_items:
+        t = (it.get("text") or "").strip()
+        toks = t.split()
+        if len(toks) > 1 and any(tk[0].isupper() and _ch.is_chord_text(tk) and not nav_re.match(tk) for tk in toks) \
+                and all((tk[0].isupper() and _ch.is_chord_text(tk)) or nav_re.match(tk) for tk in toks):
+            x0, x1 = it.get("x0", 0), it.get("x1", 0)
+            per = (x1 - x0) / max(1, len(t))
+            pos, groups = 0, []
+            for tk in toks:
+                i = t.index(tk, pos)
+                pos = i + len(tk)
+                is_nav = bool(nav_re.match(tk))
+                if is_nav and groups and groups[-1][3]:
+                    groups[-1][1] = pos                       # 이어지는 이동 기호 낱말은 한 덩어리("D.S. al Fine")
+                    groups[-1][2] += " " + tk
+                else:
+                    groups.append([i, pos, tk, is_nav])
+            for i, j, txt, _nav in groups:
+                split_items.append(dict(it, text=txt, x0=x0 + i * per, x1=x0 + j * per))
+        else:
+            split_items.append(it)
+    text_items = split_items
     keep, n = [], 0
     for it in text_items:
         t = (it.get("text") or "").strip()
-        if not t or not t[0].isupper() or not _ch.is_chord_text(t):
+        if not t or not t[0].isupper() or not _ch.is_chord_text(t) or nav_re.match(t):
             keep.append(it)
             continue
         cx = (it.get("x0", 0) + it.get("x1", 0)) / 2.0

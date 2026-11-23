@@ -226,9 +226,14 @@ def log_tail(log_path, n_lines=40, max_chars=3000):
     """Audiveris 기록의 끝부분(실패 원인을 알리는 데 쓴다)."""
     try:
         with open(log_path, encoding="utf-8", errors="replace") as f:
-            return "".join(f.readlines()[-n_lines:])[-max_chars:]
+            lines = f.readlines()
     except OSError:
         return ""
+    # [v3.71] 끝부분만으로는 "Error in export"밖에 안 보인다 — 앞쪽의 첫 경고·예외 줄들을 함께 낸다
+    head = [ln for ln in lines[:-n_lines] if ("WARN" in ln or "ERROR" in ln or "Exception" in ln)
+            and "Error in export" not in ln][:12]
+    tail = "".join(lines[-n_lines:])[-max_chars:]
+    return ("[앞쪽 경고]\n" + "".join(head)[:1500] + "[끝부분]\n" if head else "") + tail
 
 
 def _run_audiveris_once(src: str, out_dir: Path, timeout_sec: int, tag: str = ""):

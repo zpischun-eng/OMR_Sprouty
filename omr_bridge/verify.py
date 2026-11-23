@@ -30,7 +30,7 @@ import cv2
 import numpy as np
 
 EXTS = (".pdf", ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
-VERIFY_VERSION = "3"                    # 비교 방법이 바뀌면 올린다(예전 items 결과를 다시 계산)
+VERIFY_VERSION = "4"                    # 비교 방법이 바뀌면 올린다(예전 items 결과를 다시 계산)
 GOOD = ("ok", "anacrusis", "time_change")
 
 # 유형(내부 키) → 보고서 문구
@@ -81,7 +81,8 @@ def file_id(path):
 
 # ------------------------------------------------------------------ 한 파일 → 페이지별 (원본, 편집 악보)
 class PageData:
-    def __init__(self, page_no, orig_gray, ren_gray, staves, il, boxes):
+    def __init__(self, page_no, orig_gray, ren_gray, staves, il, boxes, text_boxes=None):
+        self.text_boxes = text_boxes or []   # [(x0, y0, x1, y1)] 코드 이름 자리(페이지 좌표) — 글자로 뺀다
         self.page_no = page_no
         self.orig = orig_gray           # 원본(회색)
         self.ren = ren_gray             # 편집 악보(회색, 원본과 같은 크기·좌표)
@@ -139,7 +140,8 @@ def load_pages(path, progress=None, timeout_sec=900):
                 il = _il_of(st.staff_groups, 1.0)
                 boxes = [(mb.measure.number, mb.measure.system, mb.bbox[0], mb.bbox[2])
                          for mb in lay.measure_boxes]
-                pages.append(PageData(i + 1, orig, ren, staves, il, boxes))
+                pages.append(PageData(i + 1, orig, ren, staves, il, boxes,
+                                      _harmony_boxes(st.score, il, 1.0, 1.0, p.dy_orig, h, st.header_items)))
             return pages, st.score, list(st.warnings)
     from omr_bridge.document_adapter import run_document
     if progress:
@@ -157,8 +159,31 @@ def load_pages(path, progress=None, timeout_sec=900):
     ren = np.array(img.convert("L").crop((lm, 0, lm + ow, oh)))
     staves = _staves_from_groups(pm.staff_groups, pm.sy)
     boxes = [(mb.measure.number, mb.measure.system, mb.bbox[0], mb.bbox[2]) for mb in lay.measure_boxes]
-    return [PageData(1, _gray(doc.stacked_bgr), ren, staves, _il_of(pm.staff_groups, pm.sy), boxes)], \
+    il1 = _il_of(pm.staff_groups, pm.sy)
+    return [PageData(1, _gray(doc.stacked_bgr), ren, staves, il1, boxes,
+                     _harmony_boxes(pm.score, il1, pm.sx, pm.sy, 0.0, oh, pm.header_items))], \
         pm.score, list(doc.warnings)
+
+
+def _harmony_boxes(score, il, sx, sy, dy, h, items=None):
+    """코드 이름·악보 안 글자(Fine·빠르기말 등)가 그려지는 자리(페이지 좌표 상자) — 원본에서 읽은 위치 둘레."""
+    out = []
+    for it in items or []:
+        if it.get("x0") is None or it.get("y") is None:
+            continue
+        hh = (it.get("h") or il) * sy
+        y = it["y"] * sy - dy
+        out.append((it["x0"] * sx - 0.6 * il, y - 0.9 * hh - 0.3 * il, it.get("x1", it["x0"]) * sx + 0.6 * il,
+                    y + 0.9 * hh + 0.3 * il))
+    for m in score.measures:
+        for e in m.elements:
+            hm = getattr(e, "harmony", None)
+            if not hm or hm.get("x") is None or hm.get("y") is None:
+                continue
+            x, y = hm["x"] * sx, hm["y"] * sy - dy
+            if -3 * il < y < h + 3 * il:
+                out.append((x - 2.0 * il, y - 1.6 * il, x + 4.5 * il, y + 1.6 * il))
+    return out
 
 
 def _il_of(groups, sy):
@@ -255,8 +280,14 @@ def _text_bands(ink, staves, il):
             continue
         # 줄을 이루는 글자들의 x 범위만(띄엄띄엄 있는 코드 이름 사이의 음표까지 덮지 않게): 글자 주변만
         y0, y1 = max(0, int(min(c[3] for c in r) - pad)), min(h, int(max(c[4] for c in r) + pad))
-        for c in r:
+        rs = sorted(r, key=lambda c: c[1])
+        for c in rs:
             band[y0:y1, max(0, int(c[1] - 1.2 * il)):min(w, int(c[2] + 1.2 * il))] = True
+        # [검증 4판] 글자 사이가 5칸 안이면 그 사이도 글자 줄(가사의 붙임표 '-'가 글자에서 떨어져 있어
+        # 띠 밖에 남았다 — 전곡 검증의 'dot' 약 2,500개)
+        for p_, c in zip(rs, rs[1:]):
+            if 0 < c[1] - p_[2] < 5 * il:
+                band[y0:y1, max(0, int(p_[2])):min(w, int(c[1]))] = True
     return band
 
 
@@ -337,6 +368,8 @@ def diff_page(pd):
     # 모두 글자로 본다. 2판은 차이 조각에서 찾아, 글꼴이 달라 조금씩 어긋난 글자 조각(5개 미만)이 남아
     # 성가 20곡의 '덩어리'의 대부분이 글자였다.
     band = _text_bands(a, pd.staves, il) | _text_bands(b, pd.staves, il)
+    for x0, y0, x1, y1 in pd.text_boxes:          # 코드 이름(띄엄띄엄 있어 글자 줄로 안 잡힌다 — 글꼴만 다름)
+        band[max(0, int(y0)):max(0, int(y1)), max(0, int(x0)):max(0, int(x1))] = True
     text_m = _find_text(miss, pd.staves, il) | (miss & (outside | band))
     text_r = _find_text(extra, pd.staves, il) | (extra & (outside | band))
     miss_m = miss & ~text_m
@@ -356,6 +389,10 @@ def diff_page(pd):
             continue
         x, y, bw, bh, _a = st[j]
         bw2, bh2 = max(1, bw - km + 1), max(1, bh - km + 1)   # 합치느라 불린 만큼 되돌린 크기
+        # [검증 4판] 꼬리·머리 모양의 글꼴 차이(양쪽에 다 있고 아주 작은 것)는 인식 오류가 아니다 —
+        # 전곡 검증 덩어리의 1/3(약 6,400개)이 8분음표 꼬리 곡선 차이였다
+        if mp > 0 and ep > 0 and bw2 <= 1.3 * il and bh2 <= 1.7 * il and mp + ep < 0.45 * il * il:
+            continue
         cx, cy = x + bw / 2.0, y + bh / 2.0
         line, dist = None, 1e9
         for l_, top, bot in pd.staves:
@@ -664,7 +701,15 @@ def make_send_zip(out_dir, items, summary, per_type=70, per_file=2, max_mb=14):
         z.writestr("failures.json", json.dumps(fails, ensure_ascii=False, indent=1))
         index = []
         used = 0
-        for crop, (it, b) in sorted(chosen.items(), key=lambda kv: (kv[1][1]["type"], kv[0])):
+        # [검증 4판] 유형을 돌아가며 담는다(예전엔 유형 이름 순이라 용량이 차면 symbol·vline 조각이 통째로 빠졌다)
+        per = {}
+        for crop, (it, b) in sorted(chosen.items(), key=lambda kv: -(kv[1][1]["miss"] + kv[1][1]["extra"])):
+            per.setdefault(b["type"], []).append((crop, (it, b)))
+        order, k = [], 0
+        while any(len(v) > k for v in per.values()):
+            order += [v[k] for t, v in sorted(per.items()) if len(v) > k]
+            k += 1
+        for crop, (it, b) in order:
             fp = out_dir / "crops" / crop
             if not fp.exists():
                 continue

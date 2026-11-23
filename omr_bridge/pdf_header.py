@@ -344,9 +344,13 @@ def extract_lyric_tokens(pdf_path, page_index, dpi, crop_x0, crop_y0, staves, in
                     # (음절만의 가운데는 음표에서 1.6칸 넘게 오른쪽이라 붙지 못하고 빠졌다)
                     x_ = (verse_left + w[-1][3]) / 2
                     verse_left = None
-                row_tokens.append({"text": "-" if text == "―" else text,
-                                   "x": x_, "y": rw["cy"], "h": h,
-                                   "line": line_idx, "staff": staff_no, "row": ri})
+                tok = {"text": "-" if text == "―" else text,
+                       "x": x_, "y": rw["cy"], "h": h,
+                       "line": line_idx, "staff": staff_no, "row": ri}
+                if tok["text"] == "-" and len(w) == 1:        # [v3.71] 붙임표의 실제 높이·길이(원본 그대로 긋기)
+                    tok["hdy"] = (w[0][0] + w[0][1]) / 2 - rw["cy"]   # 줄 가운데에서 얼마나 위·아래인지
+                    tok["hw"] = w[0][3] - w[0][2]
+                row_tokens.append(tok)
             if row_tokens:
                 tokens.extend(row_tokens)
                 ri += 1

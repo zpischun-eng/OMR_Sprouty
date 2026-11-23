@@ -222,6 +222,9 @@ def render(layout, orig_w, orig_h, F=3, selected=None, header_strips=None,
     # 빠져 있었다(실사용 검증 중 지적받음).
     for sid, s_list in systems_by_index.items():
         s_sorted = sorted(s_list, key=lambda s: s.staff_top)
+        if len(s_sorted) < 2:
+            continue                     # [v3.71] 보표가 하나뿐인 줄에는 여는 세로줄이 없다(표준 조판 — 일괄 검증:
+            #                              성가 465곡의 거의 모든 줄에서 원본에 없는 세로줄을 그리고 있었다)
         y0s, y1s = Y(s_sorted[0].lines_y[0]), Y(s_sorted[-1].lines_y[4])
         bxs = X(s_sorted[0].x_left)
         _thin(bxs, y0s, y1s)
@@ -531,7 +534,13 @@ def render(layout, orig_w, orig_h, F=3, selected=None, header_strips=None,
     for mb in layout.measure_boxes:
         for e in mb.measure.elements:
             for ly in (getattr(e, "lyrics", None) or {}).values():
-                if ly.get("text"):
+                if ly.get("text") == "-" and ly.get("hdy") is not None:
+                    # [v3.71] 붙임표는 글꼴마다 높이가 달라 원본과 어긋났다 → 원본의 그 자리·길이로 선을 긋는다
+                    hw = max(2.0, ly.get("hw", ly["h"] * 0.3) * F / 2.0)
+                    yy = Y(ly["y"] + ly["hdy"] - lyric_y_off)
+                    d.line([X(ly["x"]) - hw, yy, X(ly["x"]) + hw, yy], fill=INK,
+                           width=max(2, int(round(ly["h"] * F * 0.07))))
+                elif ly.get("text"):
                     d.text((X(ly["x"]), Y(ly["y"] - lyric_y_off)), ly["text"], fill=INK,
                            font=_font_ko(ly["h"] * F / KO_GLYPH_HEIGHT_RATIO), anchor="mm")
 
