@@ -65,6 +65,23 @@ def build_page(doc, sheet: int = 1) -> PageModel:
         notes.append(f"원본에 박자표가 없습니다 — 마디 길이가 대부분 {imp:g}박이라 그 길이로 검사합니다" if imp else
                      "원본에 박자표가 없습니다 — 마디마다 길이가 달라 자유 리듬(그레고리오 성가 등)으로 보고 "
                      "박자 검사를 하지 않습니다")
+    # [v3.90] 박자 있는 곡 안의 낭송 줄: 한 줄이 통째로 한 마디이고 온음표(낭송음)가 있으며 길이가 박자와 다르면
+    # 그 마디만 자유 리듬(시편 응송 — 후렴은 6/8, 절은 낭송. 성가 492번 8~11마디)
+    if getattr(score, "time_sig_known", True):
+        per_line = {}
+        for m_ in score.measures:
+            per_line.setdefault(m_.system, []).append(m_)
+        n_free = 0
+        for ln_, ms_ in per_line.items():
+            if len(ms_) != 1:
+                continue
+            m_ = ms_[0]
+            if any(e.kind == "note" and e.duration_base == 1 for e in m_.elements) and \
+                    abs(ed.free_capacity(m_) - ed._capacity_of(score, m_)) > 0.01:
+                m_.free_meter = True
+                n_free += 1
+        if n_free:
+            notes.append(f"낭송 줄(온음표 하나에 가사 여러 낱말) {n_free}마디는 박자 검사를 하지 않습니다")
     ts_added = [] if pdf_ts else ed.infer_missed_time_changes(score, rec_.get("time_printed") or {})
     # [v3.40] 원본에 찍힌 박자표를 마디에 기억 — 줄 첫머리에 다시 찍힌 박자표(값이 같아도)를 원본처럼 그리고,
     # C·₵ 기호면 숫자 대신 기호로
@@ -103,6 +120,13 @@ def build_page(doc, sheet: int = 1) -> PageModel:
         if done:
             notes.append(f"인식되지 않은 음표 {len(done)}개를 찾아 자동으로 넣었습니다(넣으면 마디가 정확히 "
                          "맞는 경우만): " + ", ".join(q["text"] for q in done))
+        notes += ik.recover_dropped_notes(score, blobs, ik._gray(img, up), groups)     # [v3.90]
+        notes += ik.recover_accidentals(score, ik._gray(img, up), groups)              # [v3.90]
+        notes += ik.recover_breath_marks(score, ik._gray(img, up), groups)             # [v3.90]
+        try:
+            ik.detect_tail_final(score, ik._gray(img, up), groups, ctx.get("barlines"))   # [v3.90]
+        except Exception:
+            pass
         # [v2.54] 화음 속 먼 같은 음 떼기(+빔 증거면 8분 빔) — 자동 보완이 Audiveris가 빼 둔 머리를 앞 화음에
         # 붙이는 경우까지 보도록 자동 보완 뒤에
         notes += ik.split_far_unisons(score, blobs)

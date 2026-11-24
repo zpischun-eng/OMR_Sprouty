@@ -245,7 +245,15 @@ def render(layout, orig_w, orig_h, F=3, selected=None, header_strips=None,
                 ya, yb = Y(grp_[0].lines_y[0]), Y(grp_[-1].lines_y[4])
                 _thick(bx0, ya, yb)
                 _thin(bx0 + ss * 0.6, ya, yb)
-                _dots(bx0 + ss * 1.0, grp_)
+                _dots(bx0 + ss * 1.25, grp_)
+
+    # [v3.90] 마지막 마디선(도돌이 끝) 뒤 빈 오선 토막의 마침줄
+    for sid_, xr_ in getattr(layout, "tail_finals", []) or []:
+        mem_ = sorted(systems_by_index.get(sid_, []), key=lambda s: s.staff_top)
+        if mem_:
+            ya, yb = Y(mem_[0].lines_y[0]), Y(mem_[-1].lines_y[4])
+            _thin(X(xr_) - ss * 0.6, ya, yb)
+            _thick(X(xr_), ya, yb)
 
     for mb in layout.measure_boxes:
         sys_members = sorted(systems_by_index[mb.measure.system],
@@ -1489,7 +1497,9 @@ def _draw_note(d, g, layout, F, ss, xoff=0, beam_y=None, stem_up=None, draw_flag
         if ar["kind"] == "tremolo":                     # [v2.90] 빗금 수에 따라
             cp = _TREMOLO_GLYPH.get(int(ar.get("n", 1)))
         if cp and use_font:
-            _smufl(d, cp, x + ar["dx"] * F, y + ar["dy"] * F, ss)
+            # [v3.90] 숨표 글리프는 기준선이 아래쪽이라, 적어 둔 '가운데' 자리에 오도록 0.45칸 내려 그린다
+            _yo = ss * 0.45 if ar["kind"] == "breath" else 0.0
+            _smufl(d, cp, x + ar["dx"] * F, y + ar["dy"] * F + _yo, ss)
 
     if e.dotted:
         # 점은 음표 머리 오른쪽. 머리가 줄 '위'에 있으면(줄 사이 칸이 아니면)

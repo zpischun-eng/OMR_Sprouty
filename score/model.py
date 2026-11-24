@@ -198,6 +198,7 @@ class Measure:
         # 렌더러는 줄 시작에만 박자표를 그리는 전제라 이 변경을 표시할
         # 방법이 없었다(실사용 검증 중 지적받음 — Audiveris 인식 자체는
         # 정확했는데 화면에 반영되지 않았음).
+    free_meter: bool = False      # [v3.90] 이 마디만 자유 리듬(낭송) — 길이 검사 안 함
     ts_printed: Optional[tuple] = None  # [v3.40] 원본에 찍힌 박자표 (beats, beat_type, "common"|"cut"|None) —
         # 값이 바뀌지 않아도(줄 첫머리에 다시 찍은 것) 원본처럼 그리고, C·₵ 기호를 숫자로 바꾸지 않는다
     key_change: Optional[int] = None  # [v1.10 조표 바뀜] 이 마디부터 새 조표(fifths). 곡 처음 조표는

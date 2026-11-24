@@ -29,6 +29,8 @@ def _capacity_of(score: Score, measure: Measure) -> float:
     부족'으로 잘못 표시됐다(엔진 자체 판정은 정확했는데 편집기 검증만
     그 정보를 몰랐던 것 — 실제로 확인된 버그).
     """
+    if getattr(measure, "free_meter", False):        # [v3.90] 박자 있는 곡 안의 낭송 마디(시편 낭송음 등)
+        return free_capacity(measure)
     if measure.target_capacity is not None:
         return measure.target_capacity
     # [버그 수정 — 시험 악보에서 발견] 곡 중간에 박자가 바뀌면(4/4 → 6/8) 그 뒤 마디들도
@@ -338,7 +340,12 @@ def detect_anacrusis(score: Score) -> bool:
     last = last_m.quarter_sum(_capacity_of(score, last_m))
     if first <= 0 or first >= cap - 0.01:
         return False
-    return abs((first + last) - cap) < 0.01
+    if abs((first + last) - cap) < 0.01:
+        return True
+    # [v3.90] 끝 마디가 보충하지 않는 못갖춘마디(후렴이 D.C.로 돌아가는 성가 등): 첫 마디가 아주 짧고(1/3 이하)
+    # 쉼표·읽지 못한 머리가 없으면 못갖춘마디로 본다(성가 492번: 6/8에 8분음표 하나로 시작, 끝 마디는 꽉 참)
+    return (first <= cap / 3.0 + 0.01 and all(e.kind == "note" for e in first_m.elements)
+            and not (getattr(first_m, "unexplained_heads", None) or {}))
 
 
 def _same_stem_lone_conflict(measure, cap_q) -> bool:

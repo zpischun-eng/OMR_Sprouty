@@ -374,6 +374,10 @@ def layout_score_world(score, staves_by_system, sx, sy, barlines=None, staff_gro
                      if xs_first_ is not None else 0.0)
         x_right = ((bl_sys[-1] * sx) if bl_sys
                    else ((max(xe_all) * sx) if xe_all else 0))
+        _tf = (getattr(score, "tail_final", None) or {}).get(sid)      # [v3.90] 마지막 마디선 뒤 빈 오선 + 마침줄
+        if _tf and _tf * sx > x_right:
+            x_right = _tf * sx
+            layout.tail_finals = getattr(layout, "tail_finals", []) + [(sid, x_right)]
         # [Tier2] 보표가 여러 개(그랜드 스태프 등)면 각 보표마다 SystemLayout을
         # 하나씩 등록하고, brace_group=sid로 묶어 렌더러가 왼쪽에 중괄호를
         # 그릴 수 있게 한다. 보표가 1개면 기존과 동일(brace_group=-1).

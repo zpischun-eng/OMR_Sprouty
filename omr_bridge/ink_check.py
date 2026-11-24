@@ -1498,7 +1498,10 @@ def fix_durations_by_ink(score, gray, staff_groups):
         n, _l, st, _c = cv2.connectedComponentsWithStats(reg, 8)
         return sum(1 for j in range(1, n)
                    if 0.15 * il <= st[j][2] <= 0.6 * il and 0.15 * il <= st[j][3] <= 0.6 * il
-                   and abs(st[j][2] - st[j][3]) <= 0.3 * il)
+                   and abs(st[j][2] - st[j][3]) <= 0.3 * il
+                   # 창 가장자리에 걸린 조각은 점이 아니다(16분음표 꼬리 끝이 잘려 점처럼 보임 — 성가 55번 16마디)
+                   and st[j][0] > 0 and st[j][1] > 0
+                   and st[j][0] + st[j][2] < reg.shape[1] and st[j][1] + st[j][3] < reg.shape[0])
 
     def flag_ink(e, il):
         st_ = getattr(e, "src_stem", None)
@@ -1527,6 +1530,37 @@ def fix_durations_by_ink(score, gray, staff_groups):
                         fixed.append(f"{m.number}마디 2분→4분(머리가 꽉 참)")
             continue
         st = ed.validate(score).get(m.number)
+        if st and st[0] == "under" and any(e.in_triplet for e in m.elements):
+            # [v3.90] 가짜 셋잇단: Audiveris가 없는 셋잇단을 만들어 마디가 '부족'(성가 127번 2마디 — 4분음표 넷 중
+            # 셋을 셋잇단으로). 셋잇단을 풀면 마디가 정확히 맞고, 원본에 숫자 3이 없으면 푼다.
+            tri = [e for e in m.elements if e.in_triplet]
+            for e in tri:
+                e.in_triplet = False
+            st2 = ed.validate(score).get(m.number)
+            has3 = False
+            if st2 and st2[0] in ("ok", "anacrusis", "time_change"):
+                try:
+                    from omr_bridge import brush as _br
+                    boxes = [e.src_bbox for e in tri if e.src_bbox]
+                    sn_ = tri[0].staff_no
+                    il_ = il_of(m, sn_)
+                    ys_ = (staff_groups.get(m.system) or [])[sn_ - 1]
+                    xa = int(max(0, min(b[0] for b in boxes) - il_))
+                    xb = int(min(W, max(b[0] + b[2] for b in boxes) + il_))
+                    for ya, yb in ((ys_[0] - 4.5 * il_, ys_[0] - 0.4 * il_), (ys_[4] + 0.4 * il_, ys_[4] + 4.5 * il_)):
+                        ya, yb = int(max(0, ya)), int(min(H, yb))
+                        if yb - ya > il_ and xb - xa > il_:
+                            tp = _br.find_tuplet3(gray[ya:yb, xa:xb] < 140, il_)
+                            if tp is not None and tp[0] >= 0.78:      # 코드 글자 'G'가 0.62까지 닮는다(진짜 3은 0.9 이상)
+                                has3 = True
+                except Exception:
+                    has3 = True                           # 확인하지 못하면 건드리지 않는다
+            if st2 and st2[0] in ("ok", "anacrusis", "time_change") and not has3:
+                fixed.append(f"{m.number}마디 셋잇단 해제(원본에 3이 없음)")
+            else:
+                for e in tri:
+                    e.in_triplet = True
+            continue
         if not st or st[0] != "over":
             continue
         excess = st[1] - st[2]
@@ -1544,7 +1578,7 @@ def fix_durations_by_ink(score, gray, staff_groups):
             if getattr(e, "double_dot", False):
                 if dots_right(e, il) == 1:
                     cands.append((e, "double_to_single"))
-            if e.duration_base == 4 and flag_ink(e, il) >= 0.22 and getattr(e, "beam_group", -1) == -1:
+            if e.duration_base == 4 and flag_ink(e, il) >= 0.16 and getattr(e, "beam_group", -1) == -1:
                 cands.append((e, "quarter_to_eighth"))
         for e, kind in cands:
             group = [x for x in m.elements if x is e or (getattr(e, "chord_group", -1) != -1
@@ -1636,3 +1670,357 @@ def detect_time_signature(score, gray, staff_groups):
         return 2, 2, "cut"
     b, bt = brush.TIMESIGS[k]
     return b, bt, None
+
+
+def recover_accidentals(score, gray, staff_groups, _dbg=None):
+    """[v3.90] 머리 왼쪽에 임시표(♯ ♭ ♮)가 찍혀 있는데 Audiveris가 읽지 않은 음표에 임시표를 넣는다.
+    (성가 62번: 제자리표 둘, 55번: 올림표 하나 — 음높이가 반음 틀린 채로 나오고 있었다)
+    머리 바로 왼쪽 잉크에서 오선을 걷어 내고 글꼴 모양과 맞춰, 충분히 닮았을 때만(0.80 이상, 2위와 차이 0.10 — 실측 0.92~0.99).
+    같은 마디 뒤쪽의 같은 음에도 이어서 적용. 반환: 알림 문구 목록."""
+    from . import brush
+    H, W = gray.shape[:2]
+    ALT = {"sharp": 1, "flat": -1, "natural": 0}
+    done = []
+    for m in sorted(score.measures, key=lambda q: q.number):
+        grp = (staff_groups or {}).get(m.system)
+        if not grp:
+            continue
+        els = sorted((e for e in m.elements if e.kind == "note" and e.src_bbox and not e.is_grace
+                      and not getattr(e, "synthetic_rest", False)), key=lambda e: e.src_x)
+        for e in els:
+            if e.accidental or e.staff_no - 1 >= len(grp):
+                continue
+            ys = grp[e.staff_no - 1]
+            il = (ys[4] - ys[0]) / 4.0
+            x0, y0, w, h = e.src_bbox
+            cy = y0 + h / 2.0
+            xa, xb = int(max(0, x0 - 1.55 * il)), int(x0 - 0.08 * il)
+            ya, yb = int(max(0, cy - 2.0 * il)), int(min(H, cy + 1.7 * il))
+            if xb - xa < 0.8 * il or yb - ya < 2 * il:
+                continue
+            # 다른 음표 머리·기둥이 이 자리에 있으면 건너뜀
+            if any(o is not e and o.src_bbox and o.src_bbox[0] + o.src_bbox[2] > xa - 0.3 * il
+                   and o.src_bbox[0] < xb and abs((o.src_bbox[1] + o.src_bbox[3] / 2.0) - cy) < 3.5 * il
+                   for o in m.elements):
+                continue
+            reg = (gray[ya:yb, xa:xb] < 140).astype(np.uint8)
+            # 오선·덧줄 걷어 내기: 가로로 긴 얇은 줄(세로 두께 0.25칸 이하)
+            hk = cv2.getStructuringElement(cv2.MORPH_RECT, (max(3, int(1.2 * il)), 1))
+            wide = cv2.morphologyEx(reg, cv2.MORPH_OPEN, hk)
+            vk = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(2, int(0.28 * il))))
+            thick = cv2.morphologyEx(reg, cv2.MORPH_OPEN, vk)
+            clean = reg & ~(wide & ~thick & 1)
+            n, lab, st, _c = cv2.connectedComponentsWithStats(clean, 8)
+            keep = np.zeros_like(clean)
+            for j in range(1, n):
+                bx, by, bw, bh, ar = st[j]
+                if ar < 0.03 * il * il:
+                    continue
+                if bx == 0 and bh > 1.2 * il and bw < 0.3 * il:      # 창 왼쪽 끝에 걸린 세로줄(마디선·앞 기둥)
+                    continue
+                keep[lab == j] = 1
+            yy, xx = np.nonzero(keep)
+            if len(xx) < 0.25 * il * il:
+                continue
+            bx0, bx1, by0, by1 = xx.min(), xx.max(), yy.min(), yy.max()
+            bw, bh = bx1 - bx0 + 1, by1 - by0 + 1
+            if not (1.7 * il <= bh <= 3.4 * il and 0.5 * il <= bw <= 1.35 * il):
+                continue
+            if bx0 == 0 or by0 == 0 or by1 == keep.shape[0] - 1:        # 창 밖으로 이어지는 것은 임시표가 아니다
+                continue
+            sc = brush.match_templates(reg[by0:by1 + 1, bx0:bx1 + 1].astype(bool), il)
+            sc3 = sorted(((sc.get(k, 0.0), k) for k in ALT), reverse=True)
+            if _dbg is not None:
+                _dbg.append((m.number, e.step, e.octave, [(round(v, 2), k) for v, k in sc3], (bw / il, bh / il)))
+            if sc3[0][0] < 0.80 or sc3[0][0] - sc3[1][0] < 0.10:
+                continue
+            kind = sc3[0][1]
+            if e.alter == ALT[kind]:
+                # 음높이는 이미 맞다 — 표시만 빠진 경우(앞의 같은 음에서 이어진 것일 수도 있어 그대로 둔다)
+                continue
+            old = e.alter
+            e.alter, e.accidental = ALT[kind], kind
+            e.acc_dx = (xa + (bx0 + bx1) / 2.0) - (x0 + w / 2.0)
+            for o in els:
+                if (o.src_x > e.src_x and o.staff_no == e.staff_no and o.step == e.step and o.octave == e.octave
+                        and not o.accidental and o.alter == old):
+                    o.alter = ALT[kind]
+            done.append(f"{m.number}마디 {e.step}{ {1: '♯', -1: '♭', 0: '♮'}[ALT[kind]] }")
+    return ([f"원본에 찍혀 있는데 읽히지 않은 임시표를 넣었습니다: " + ", ".join(done[:12])
+             + (" …" if len(done) > 12 else "")] if done else [])
+
+
+def recover_breath_marks(score, gray, staff_groups, _dbg=None):
+    """[v3.90] 오선 바로 위의 숨표(,)를 찾아 그 앞 음표에 붙인다(Audiveris는 숨표를 읽지 않는다 — 성가 17번).
+    오선 위 2칸 띠에서 혼자 떨어져 있는 쉼표 모양(폭 0.3~0.8칸, 높이 0.6~1.3칸)만, 글꼴 숨표와 0.72 이상 닮을 때."""
+    from . import brush
+    H, W = gray.shape[:2]
+    done = 0
+    by_sys = {}
+    for m in score.measures:
+        by_sys.setdefault(m.system, []).append(m)
+    for sid, grp in (staff_groups or {}).items():
+        for si, ys in enumerate(grp):
+            il = (ys[4] - ys[0]) / 4.0
+            ya, yb = int(max(0, ys[0] - 2.2 * il)), int(ys[0] - 0.12 * il)
+            if yb - ya < il:
+                continue
+            band = (gray[ya:yb] < 140).astype(np.uint8)
+            n, lab, st, _c = cv2.connectedComponentsWithStats(band, 8)
+            notes = [(e, e.src_bbox[0] + e.src_bbox[2] / 2.0, e.src_bbox[1] + e.src_bbox[3] / 2.0)
+                     for m in by_sys.get(sid, []) for e in m.elements
+                     if e.kind == "note" and e.src_bbox and e.staff_no == si + 1 and not e.is_grace]
+            if not notes:
+                continue
+            for j in range(1, n):
+                bx, by, bw, bh, ar = (int(v) for v in st[j])
+                if not (0.3 * il <= bw <= 0.8 * il and 0.6 * il <= bh <= 1.3 * il):
+                    continue
+                if by == 0 or by + bh >= band.shape[0]:
+                    continue
+                # 혼자 떨어져 있어야 한다(글자·코드 이름의 일부가 아님)
+                px, py = int(0.7 * il), int(0.3 * il)
+                nb = band[max(0, by - py):by + bh + py, max(0, bx - px):bx + bw + px]
+                lb = lab[max(0, by - py):by + bh + py, max(0, bx - px):bx + bw + px]
+                if ((nb > 0) & (lb != j)).sum() > 0:
+                    continue
+                ink = (lab[by:by + bh, bx:bx + bw] == j)
+                sc = brush.match_templates(ink, il).get("breath", 0.0)
+                if _dbg is not None:
+                    _dbg.append((sid, bx, ya + by, bw, bh, round(float(sc), 2)))
+                if sc < 0.72:
+                    continue
+                tcx, tcy = bx + bw / 2.0, ya + by + bh / 2.0
+                left = [t for t in notes if 0 < tcx - t[1] <= 40.0 * il]      # 온음표 마디 끝의 숨표는 멀다(성가 17번: 13.5칸)
+                if not left:
+                    continue
+                e, hx, hy = max(left, key=lambda t: t[1])
+                if any(a_.get("kind") == "breath" for a_ in (e.articulations or [])):
+                    continue
+                e.articulations = list(e.articulations or []) + [
+                    {"kind": "breath", "above": True, "dx": tcx - hx, "dy": tcy - hy}]
+                done += 1
+    return [f"원본의 숨표(,) {done}개를 찾아 넣었습니다"] if done else []
+
+
+def detect_tail_final(score, gray, staff_groups, barlines):
+    """[v3.90] 줄의 마지막 마디선(도돌이 끝 등) 뒤로 오선이 조금 더 이어지고 굵은 마침 세로줄로 끝나는 경우
+    (성가 127번: 도돌이 끝 뒤에 빈 오선 토막 + 마침줄 — Audiveris는 도돌이 끝까지만 보표로 본다).
+    score.tail_final = {줄 번호: 굵은 줄 가운데 x(원본 좌표)} 로 적어 두면 오선과 마침줄을 거기까지 그린다."""
+    H, W = gray.shape[:2]
+    out = {}
+    for sid, grp in (staff_groups or {}).items():
+        bl = sorted((barlines or {}).get(sid, []))
+        if not bl or not grp:
+            continue
+        ys = grp[0]
+        yb_ = grp[-1][4]
+        il = (ys[4] - ys[0]) / 4.0
+        xb = int(bl[-1])
+        xa, xe = int(xb + 0.8 * il), int(min(W, xb + 9 * il))
+        if xe - xa < il:
+            continue
+        y0, y1 = int(ys[0]), int(yb_)
+        col = (gray[y0:y1, xa:xe] < 140).mean(axis=0)
+        thick = [i for i, v in enumerate(col) if v > 0.93]
+        if not thick:
+            continue
+        # 가장 오른쪽 굵은 토막
+        end = thick[-1]
+        start = end
+        while start - 1 in thick:
+            start -= 1
+        if end - start + 1 < 0.25 * il or end - start + 1 > 1.2 * il:
+            continue
+        xs_, xe_ = xa + start, xa + end
+        # 그 사이 오선이 이어져 있고(윗줄), 칸에는 아무것도 없어야 한다(음표가 있으면 못 읽은 마디 — 건드리지 않음)
+        top = (gray[max(0, y0 - 2):y0 + 3, xb:xs_] < 140).any(axis=0).mean() if xs_ > xb else 0
+        gap = gray[int(ys[0] + 0.3 * il):int(ys[0] + 0.7 * il), int(xb + 0.8 * il):max(int(xb + 0.8 * il) + 1, xs_ - int(0.8 * il))]
+        if top < 0.95 or (gap.size and (gap < 140).mean() > 0.03):
+            continue
+        out[sid] = (xs_ + xe_) / 2.0
+    score.tail_final = out
+    return out
+
+
+def recover_dropped_notes(score, blobs, gray, staff_groups):
+    """[v3.90] Audiveris가 박자표를 잘못 읽고(9/8 → 6/8 등) 그 박자에 넘치는 음표를 내보내지 않은 마디를 되살린다.
+    (성가 55번: 9/8을 6/8로 읽어 마디마다 뒤의 8분음표 셋이 통째로 빠짐 — 곡 전체 음표의 절반)
+    마디가 '부족'이고 그 보표가 한 성부일 때, 기존 음표와 겹치지 않는 '빠진 머리' 잉크들을 음표로 넣는다.
+      · 음높이: 오선 위 위치·음자리표·조표      · 길이: 빈 머리 = 2분(기둥 없으면 온), 검정 = 4분,
+        기둥 끝 옆에 꼬리·빔 잉크가 있으면 8분, 머리 오른쪽에 점이 있으면 점음표
+      · 그렇게 읽은 길이로 마디가 정확히 맞지 않으면 8분↔4분↔16분을 바꿔 가며 맞는 조합이 '하나뿐'일 때만
+    넣은 뒤 마디가 정확히 맞을 때만 둔다. 반환: 알림 문구 목록."""
+    from itertools import product
+    from score import editing as ed
+    from score.model import Element, _alter_map
+    H, W = gray.shape[:2]
+    good = ("ok", "anacrusis", "time_change")
+    staff_clefs = getattr(score, "staff_clefs", None) or {}
+    done = []
+
+    def dots_right(box, il):
+        x0, y0, x1, y1 = box
+        cy = (y0 + y1) / 2.0
+        xa, xb = int(x1 + 0.1 * il), int(min(W, x1 + 1.3 * il))
+        ya, yb = int(max(0, cy - 0.75 * il)), int(min(H, cy + 0.45 * il))
+        if xb - xa < 3 or yb - ya < 3:
+            return 0
+        reg = (gray[ya:yb, xa:xb] < 140).astype(np.uint8)
+        n, _l, st, _c = cv2.connectedComponentsWithStats(reg, 8)
+        return sum(1 for j in range(1, n)
+                   if 0.15 * il <= st[j][2] <= 0.6 * il and 0.15 * il <= st[j][3] <= 0.6 * il
+                   and abs(st[j][2] - st[j][3]) <= 0.3 * il
+                   # 창 가장자리에 걸린 조각은 점이 아니다(16분음표 꼬리 끝이 잘려 점처럼 보임 — 성가 55번 16마디)
+                   and st[j][0] > 0 and st[j][1] > 0
+                   and st[j][0] + st[j][2] < reg.shape[1] and st[j][1] + st[j][3] < reg.shape[0])
+
+    def flag_ink(box, stem, il, left=False, beams=False):
+        x0, y0, x1, y1 = box
+        if stem == "up":
+            xa, xb, ya, yb = x1 + 0.15 * il, x1 + 1.0 * il, y0 - 3.4 * il, y0 - 1.5 * il
+            if left:                                   # 빔의 마지막 음표: 빔이 기둥 왼쪽에 있다
+                xa, xb = x1 - 1.1 * il, x1 - 0.25 * il
+        else:
+            xa, xb, ya, yb = x0 + 0.25 * il, x0 + 1.1 * il, y1 + 1.5 * il, y1 + 3.4 * il
+            if left:
+                xa, xb = x0 - 1.0 * il, x0 - 0.15 * il
+        xa, xb, ya, yb = int(max(0, xa)), int(min(W, xb)), int(max(0, ya)), int(min(H, yb))
+        if xb - xa < 3 or yb - ya < 3:
+            return 0.0
+        reg = gray[ya:yb, xa:xb] < 140
+        if beams:
+            # 빔은 창 바깥쪽 끝까지 이어진다(꼬리는 닿지 않음). 그 끝 세로줄의 잉크 토막 수 = 빔 줄 수.
+            # 오선(얇음)은 빼고 0.25칸 이상 두꺼운 토막만 센다.
+            col = reg[:, :3].any(axis=1) if left else reg[:, -3:].any(axis=1)
+            runs, n = 0, 0
+            for v in list(col) + [False]:
+                if v:
+                    n += 1
+                else:
+                    if n >= 0.25 * il:
+                        runs += 1
+                    n = 0
+            return runs
+        return float(reg.mean())
+
+    v_all = ed.validate(score)
+    for m in sorted(score.measures, key=lambda q: q.number):
+        st = v_all.get(m.number)
+        free = bool(getattr(m, "free_meter", False))
+        if not st or not (st[0] == "under" or (free and st[0] in good)):
+            continue
+        cap = st[2]
+        for sn in sorted({e.staff_no for e in m.elements}):
+            mine = [e for e in m.elements if e.staff_no == sn and not e.is_grace]
+            if len({e.voice_no for e in mine}) != 1:
+                continue
+            grp = (staff_groups or {}).get(m.system)
+            if not grp or sn - 1 >= len(grp):
+                continue
+            ys = grp[sn - 1]
+            il = (ys[4] - ys[0]) / 4.0
+            xs_have = [(e.src_bbox[0] + e.src_bbox[2] / 2.0) for e in mine if e.src_bbox]
+            cand = [b for b in blobs if b.get("kind") == "head" and b.get("measure") == m.number
+                    and b.get("staff_no") == sn
+                    and all(abs((b["box"][0] + b["box"][2]) / 2.0 - x) > 0.9 * il for x in xs_have)]
+            if not cand or len(cand) > 7:
+                continue
+            cand.sort(key=lambda b: b["box"][0])
+            missing = cap - sum(e.quarter_length() for e in mine)
+            cl = staff_clefs.get(m.system) or []
+            clef0 = cl[sn - 1] if sn - 1 < len(cl) else ("F" if sn >= 2 else "G")
+            guess = []
+            for b in cand:
+                stem = _stem_dir(gray, b["box"], il)
+                dot = dots_right(b["box"], il) >= 1
+                if b.get("hollow"):
+                    base = 2 if stem else 1
+                    opts = [base]
+                else:
+                    # 꼬리 자리 잉크 비율(성가 8곡 실측): 4분 0.00~0.14, 8분 0.16~0.29, 16분 0.38
+                    fi = flag_ink(b["box"], stem, il) if stem else 0.0
+                    if stem:
+                        br = flag_ink(b["box"], stem, il, beams=True)
+                        bl_ = flag_ink(b["box"], stem, il, left=True, beams=True)
+                        b["_beam"] = (bool(bl_), bool(br))
+                        if free and max(br, bl_):      # 빔으로 묶인 음표: 빔 줄 수로 길이를 정한다
+                            fi = 0.4 if max(br, bl_) >= 2 else 0.2
+                    base = 16 if fi >= 0.32 else (8 if fi >= 0.15 else 4)
+                    opts = [base] + [x for x in (8, 4, 16) if x != base]
+                guess.append((b, stem, dot, opts))
+
+            def ql(base, dot):
+                return 4.0 / base * (1.5 if dot else 1.0)
+            pick = None
+            if free:                 # 낭송 마디(박자 없음): 길이 합을 맞춰 볼 수 없으니 읽은 그대로 넣는다
+                pick = [g[3][0] for g in guess]
+            elif abs(sum(ql(g[3][0], g[2]) for g in guess) - missing) < 1e-6:
+                pick = [g[3][0] for g in guess]
+            else:
+                sols = [c for c in product(*[g[3] for g in guess])
+                        if abs(sum(ql(bv, g[2]) for bv, g in zip(c, guess)) - missing) < 1e-6]
+                if sols:
+                    # 읽은 값에서 가장 적게 바꾼 조합이 하나뿐일 때만
+                    cost = lambda c: sum(1 for bv, g in zip(c, guess) if bv != g[3][0])
+                    sols.sort(key=cost)
+                    if len(sols) == 1 or cost(sols[0]) < cost(sols[1]):
+                        pick = list(sols[0])
+            if pick is None:
+                continue
+            voice = mine[0].voice_no if mine else (1 if sn == 1 else 5)
+            added = []
+            for (b, stem, dot, _o), base in zip(guess, pick):
+                x0, y0, x1, y1 = b["box"]
+                cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+                clef = clef0
+                for mm in sorted(score.measures, key=lambda q: q.number):
+                    if mm.system != m.system or mm.number > m.number:
+                        continue
+                    for e in sorted(mm.elements, key=lambda e: e.src_x):
+                        if e.staff_no == sn and e.clef_change and (mm.number < m.number or e.src_x <= cx):
+                            clef = e.clef_change
+                steps = int(round((cy - ys[0]) / (il / 2.0)))
+                dia = _DIA_TOP.get(clef, 38) - steps
+                step, octave = _STEP[dia % 7], dia // 7
+                el = Element(kind="note", duration_base=base, dotted=bool(dot), step=step, octave=octave,
+                             alter=_alter_map(score.key_at(m.number)).get(step, 0),
+                             src_bbox=(x0, y0, x1 - x0, y1 - y0), src_x=x0, staff_no=sn, voice_no=voice,
+                             synthetic=True)
+                if stem in ("up", "down"):
+                    el.stem_dir_img = stem
+                el.auto_added = True
+                m.elements.append(el)
+                added.append((el, b))
+            # 빔: 오른쪽으로 빔이 나간 음표부터 왼쪽에서 빔이 들어온 음표까지 한 묶음
+            bg = max([e.beam_group for e in m.elements if e.beam_group is not None] + [0])
+            prev = None
+            for el, b in added:
+                bl_, br = b.pop("_beam", (False, False))
+                if el.duration_base < 8:
+                    prev = None
+                    continue
+                if bl_ and prev is not None:
+                    el.beam_group = prev.beam_group
+                elif br:
+                    bg += 1
+                    el.beam_group = bg
+                prev = el if (br and el.beam_group != -1) else None
+            for el, _b in added:                       # 혼자 남은 묶음은 꼬리로
+                if el.beam_group != -1 and sum(1 for q, _ in added if q.beam_group == el.beam_group) < 2:
+                    el.beam_group = -1
+            if ed.validate(score).get(m.number, ("",))[0] in good:
+                for _el, b in added:
+                    if b in blobs:
+                        blobs.remove(b)
+                uh = getattr(m, "unexplained_heads", None) or {}
+                if uh.get(sn):
+                    uh[sn] = max(0, uh[sn] - len(added))
+                    if not uh[sn]:
+                        uh.pop(sn)
+                done.append(f"{m.number}마디 {len(added)}개")
+            else:
+                for el, _b in added:
+                    m.elements.remove(el)
+    return ([f"Audiveris가 내보내지 않은 음표를 원본에서 읽어 넣었습니다(넣으면 마디가 정확히 맞는 경우만): "
+             + ", ".join(done[:12]) + (" …" if len(done) > 12 else "")] if done else [])
