@@ -60,7 +60,7 @@ from score import musicxml as mx
 # 오류 수정 = 소수 둘째 자리 (예: 1.00 → 1.10 → 1.11 → 2.00)
 APP_NAME = "콩나물지기"
 APP_ID = "OMR_Sprouty"
-APP_VERSION = "3.90"
+APP_VERSION = "3.91"
 _USER_MSG = "\x00USER\x00"     # [v1.21] 안내 문구만 보여줄 오류 표시(코드 추적 대신)
 
 # [화면 정리 — 실사용 요청] 편집 악보의 음표별 박수·마디 합계 숫자는 가사와 겹치기도 하고,
@@ -1543,6 +1543,39 @@ class TransposeDialog(QDialog):
         return self.combo.currentData(), direction
 
 
+class HScrollWrap(QScrollArea):
+    """[v3.91] 도구 막대를 감싸는 가로 스크롤 틀 — 창이 막대의 최소 폭보다 좁아지면 가로 스크롤바가 생긴다.
+    (아래 편집 막대의 최소 폭이 약 1900px이라 창을 그보다 좁힐 수 없었다 — FHD 화면에서 창 크기 조절이 안 됨)"""
+
+    def __init__(self, inner, parent=None):
+        super().__init__(parent)
+        self._inner = inner
+        self.setWidget(inner)
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.setStyleSheet("QScrollArea { background: transparent; } "
+                           "QScrollArea > QWidget > QWidget { background: transparent; }")
+        self.viewport().setAutoFillBackground(False)
+        self._fit()
+
+    def _fit(self):
+        h = max(self._inner.minimumSizeHint().height(), self._inner.sizeHint().height(), self._inner.minimumHeight())
+        if self.width() < self._inner.minimumSizeHint().width():
+            h += self.horizontalScrollBar().sizeHint().height()
+        if self.height() != h:
+            self.setFixedHeight(h)
+
+    def minimumSizeHint(self):
+        return QSize(200, self.height())
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        self._fit()
+
+
 class TopToolbar(QFrame):
     openImageRequested = Signal()
     saveRequested = Signal()           # [v2.50] 편집 저장
@@ -2279,7 +2312,8 @@ class ScoreEditorWindow(QMainWindow):
         self.toolbar = TopToolbar()
         if getattr(self.toolbar, "chord_btn", None) is not None:          # [v3.00] 코드 반주
             self.toolbar.chord_btn.toggled.connect(lambda on: setattr(score_midi, "CHORD_ACCOMP", bool(on)))
-        root.addWidget(self.toolbar)
+        self._toolbar_wrap = HScrollWrap(self.toolbar)      # [v3.91] 좁은 창에서는 가로 스크롤
+        root.addWidget(self._toolbar_wrap)
 
         panels = QHBoxLayout()
         panels.setSpacing(2)                 # [v2.21] 가운데 틈 2+20+2px
@@ -2315,7 +2349,8 @@ class ScoreEditorWindow(QMainWindow):
         root.addLayout(panels, 1)
 
         self.bottom_bar = BottomEditBar()
-        root.addWidget(self.bottom_bar)
+        self._bottom_wrap = HScrollWrap(self.bottom_bar)
+        root.addWidget(self._bottom_wrap)
 
         self.status = QLabel("")
         self.status.setStyleSheet(
