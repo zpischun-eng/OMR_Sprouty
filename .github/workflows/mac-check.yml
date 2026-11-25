@@ -54,6 +54,7 @@ jobs:
 
       - name: ① 격리 상태에서의 판정 (서명·Gatekeeper)
         run: |
+          set +e
           cd "$DIR"
           APP=$(ls -d OMRSprouty_*.app)
           echo "== 격리 표시가 이어졌나"
@@ -80,7 +81,8 @@ jobs:
         run: |
           cd "$DIR"
           APP=$(ls -d OMRSprouty_*.app)
-          bash "처음 한 번 실행.command" > helper.log 2>&1 || true
+          set +e
+          bash "처음 한 번 실행.command" > helper.log 2>&1
           cat helper.log
           echo "격리 표시 남은 파일 수: $(xattr -r . 2>/dev/null | grep -c com.apple.quarantine || true)"
           spctl --assess --type execute -vv "$APP" 2>&1; echo "spctl after exit=$?"
@@ -101,7 +103,9 @@ jobs:
           IMG=$(find "$APP" -name "demo_song_hires.png" | head -1)
           echo "시험 악보: $IMG"
           cp "$IMG" ~/chk/
+          set +e
           "$BIN" --verify ~/chk --limit 1 --out ~/chk_out 2>&1 | tail -15
+          set -e
           ls -la ~/chk_out
           python3 - <<'EOF'
           import csv, os, sys
