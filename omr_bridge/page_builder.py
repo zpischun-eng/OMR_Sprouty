@@ -108,14 +108,12 @@ def build_page(doc, sheet: int = 1) -> PageModel:
         n_ph = ik.drop_phantom_heads(score, omr, img, up)
         if n_ph:
             notes.append(f"빔·이음줄 자리를 음표로 잘못 읽은 '유령 음표' {n_ph}개를 지웠습니다")
-        n_tx = ik.drop_notes_in_text(score, list(ctx.get("text_items") or []) + list(ctx.get("header_items") or []),
-                                     groups)                 # [v4.00]
-        if n_tx:
-            notes.append(f"글자(Fine 등)를 음표로 잘못 읽은 {n_tx}개를 지웠습니다")
+        # [v4.11] drop_notes_in_text(글자 상자 안의 Audiveris 음표 지우기)는 쓰지 않는다 — v4.00 전곡 검증에서
+        # 교과서 2곡의 진짜 음표가 사라진 것으로 보인다. 글자를 음표로 넣는 문제는 아래 '머리 후보 제외'로 막는다.
         ik.assign_stem_dirs(score, img, groups, up)          # 제안 음표의 성부 판단에도 쓴다(먼저)
         blobs = ik.find_unrecognized(img, omr, groups, score, up)
         # [v4.00] 글자(Fine·D.C. 등) 상자 안의 '머리'는 글자 조각 — 음표 제안에서 뺀다(성가 465번: Fine의 F가 16분음표로)
-        _tb = ik._text_boxes(list(ctx.get("text_items") or []) + list(ctx.get("header_items") or []))
+        _tb = ik._text_boxes(list(ctx.get("text_items") or []) + list(ctx.get("header_items") or []), min_chars=1)
         if _tb:
             for b_ in blobs:
                 if b_.get("kind") == "head":

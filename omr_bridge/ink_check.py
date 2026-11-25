@@ -2045,6 +2045,19 @@ def recover_arcs(score, gray, staff_groups, _dbg=None):
     for m in score.measures:
         by_sys.setdefault(m.system, []).append(m)
     linked = {(id(a.start), id(a.stop)) for a in score.arcs}
+    # 기존 호(이음줄)가 지나가는 음표들: 시작~끝 사이(같은 보표, 시간 순)
+    order = {}
+    for m in sorted(score.measures, key=lambda q: q.number):
+        for e in sorted(m.elements, key=lambda e: e.src_x or 0):
+            order[id(e)] = (m.number, e.src_x or 0, e.staff_no)
+    arc_span = set()
+    for a_ in score.arcs:
+        o1, o2 = order.get(id(a_.start)), order.get(id(a_.stop))
+        if not o1 or not o2:
+            continue
+        for k_, o in order.items():
+            if o[2] == o1[2] and (o1[0], o1[1]) <= (o[0], o[1]) <= (o2[0], o2[1]):
+                arc_span.add(k_)
     for sid, ms in by_sys.items():
         grp = (staff_groups or {}).get(sid)
         if not grp:
@@ -2066,7 +2079,9 @@ def recover_arcs(score, gray, staff_groups, _dbg=None):
                     continue
                 if (id(a), id(b)) in linked or a.tie_start or b.tie_stop:
                     continue
-                if a.slur_start and b.slur_stop:
+                # [v4.11] 이미 호가 시작되거나 끝나는 음표는 건드리지 않는다 — Audiveris가 읽은 긴 이음줄(음표 셋 이상)의
+                # 첫 구간을 또 하나의 호로 넣어 두 겹으로 그려졌다(v4.00 전곡 검증: 성가 37·180번)
+                if a.slur_start or b.slur_stop or (id(a) in arc_span) or (id(b) in arc_span):
                     continue
                 ax0, ay0, aw, ah = a.src_bbox
                 bx0, by0, bw, bh = b.src_bbox
@@ -2265,12 +2280,12 @@ def mark_text_blobs(blobs, text_items, lyric_tokens):
     return n
 
 
-def _text_boxes(text_items):
+def _text_boxes(text_items, min_chars=3):
     """글자 3자 이상인 PDF 글자 항목의 상자 [(x0, y0, x1, y1)] (위아래 1/4 글자 높이 여유)."""
     boxes = []
     for it in text_items or []:
         t = (it.get("text") or "").strip()
-        if sum(ch.isalnum() for ch in t) < 3 or it.get("x0") is None:
+        if sum(ch.isalnum() for ch in t) < min_chars or it.get("x0") is None:
             continue
         try:
             x0, x1, y, h = float(it["x0"]), float(it["x1"]), float(it["y"]), float(it.get("h") or 0)
