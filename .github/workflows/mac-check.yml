@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [xcode-27, macos-26, macos-15]
+        runner: [xcode-27]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     steps:
@@ -85,6 +85,14 @@ jobs:
           bash "처음 한 번 실행.command" > helper.log 2>&1
           cat helper.log
           echo "격리 표시 남은 파일 수: $(xattr -r . 2>/dev/null | grep -c com.apple.quarantine || true)"
+          echo "== 남은 파일(앞 8개)과 권한"
+          xattr -r . 2>/dev/null | grep com.apple.quarantine | head -8
+          F=$(xattr -r . 2>/dev/null | grep com.apple.quarantine | head -1 | sed 's/: com.apple.quarantine.*//')
+          ls -la "$F"; ls -ld "$(dirname "$F")"
+          echo "== 쓰기 권한을 준 뒤 다시 지우기"
+          chmod -R u+w . 2>/dev/null
+          xattr -dr com.apple.quarantine . 2>&1 | head -3
+          echo "다시 센 수: $(xattr -r . 2>/dev/null | grep -c com.apple.quarantine || true)"
           spctl --assess --type execute -vv "$APP" 2>&1; echo "spctl after exit=$?"
           BIN=$(ls "$APP/Contents/MacOS/"* | head -1)
           # 창을 띄워 20초 동안 살아 있는지(바로 죽으면 실패)
