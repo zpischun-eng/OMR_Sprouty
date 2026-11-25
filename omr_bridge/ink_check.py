@@ -2227,6 +2227,44 @@ def drop_notes_in_text(score, text_items, staff_groups):
     return n
 
 
+def mark_text_blobs(blobs, text_items, lyric_tokens):
+    """[v4.10] 붓 후보(주황 점선)에서 글자를 뺀다: PDF 글자(코드 이름·제목·이동 기호)와 가사 자리에 있는
+    미인식 잉크는 기호가 아니라 글자다 — kind를 "text"로 바꿔 표시에서 제외한다(음표 제안·검산에는 영향 없음).
+    글자 층이 없는 그림 악보에서는 아무것도 바꾸지 않는다. 반환: 바꾼 개수."""
+    boxes = []
+    for it in text_items or []:
+        t = (it.get("text") or "").strip()
+        if not t or it.get("x0") is None:
+            continue
+        try:
+            x0, x1, y, h = float(it["x0"]), float(it["x1"]), float(it["y"]), float(it.get("h") or 0)
+        except (TypeError, ValueError, KeyError):
+            continue
+        if x1 > x0 and h > 0:
+            boxes.append((x0 - 0.15 * h, y - 0.3 * h, x1 + 0.15 * h, y + 1.3 * h))
+    for tk in lyric_tokens or []:
+        t = (tk.get("text") or "").strip()
+        try:
+            x, y, h = float(tk["x"]), float(tk["y"]), float(tk.get("h") or 0)
+        except (TypeError, ValueError, KeyError):
+            continue
+        if not t or h <= 0:
+            continue
+        hw = 0.55 * h * max(1, len(t))
+        boxes.append((x - hw, y - 0.3 * h, x + hw, y + 1.3 * h))
+    if not boxes:
+        return 0
+    n = 0
+    for b in blobs:
+        if b.get("kind") not in ("other", "dot"):
+            continue
+        cx, cy = (b["box"][0] + b["box"][2]) / 2.0, (b["box"][1] + b["box"][3]) / 2.0
+        if any(x0 <= cx <= x1 and y0 <= cy <= y1 for x0, y0, x1, y1 in boxes):
+            b["kind"] = "text"
+            n += 1
+    return n
+
+
 def _text_boxes(text_items):
     """글자 3자 이상인 PDF 글자 항목의 상자 [(x0, y0, x1, y1)] (위아래 1/4 글자 높이 여유)."""
     boxes = []

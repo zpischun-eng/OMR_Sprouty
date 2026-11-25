@@ -60,7 +60,7 @@ from score import musicxml as mx
 # 오류 수정 = 소수 둘째 자리 (예: 1.00 → 1.10 → 1.11 → 2.00)
 APP_NAME = "콩나물지기"
 APP_ID = "OMR_Sprouty"
-APP_VERSION = "4.00"
+APP_VERSION = "4.10"
 _USER_MSG = "\x00USER\x00"     # [v1.21] 안내 문구만 보여줄 오류 표시(코드 추적 대신)
 
 # [화면 정리 — 실사용 요청] 편집 악보의 음표별 박수·마디 합계 숫자는 가사와 겹치기도 하고,
@@ -584,6 +584,7 @@ class OriginalImagePanel(SyncedViewport):
     pickRequested = Signal(float, float)   # [v2.40] 원본에서 기호 넣기 — 두 번 클릭한 자리(곡 좌표)
     brushDone = Signal(list, float)        # [v2.60] 붓질을 마침 — (붓 자국 점 목록들, 반지름) 곡 좌표
     candidateChosen = Signal(str)          # [v2.60] 후보 고름(내부 키)
+    markClicked = Signal(float, float, float, float)   # [v4.10] 주황 점선(붓 후보 자리)을 클릭 — 상자(곡 좌표)
     brushToggled = Signal(bool)
 
     # ---------------- [v2.60] 붓으로 기호 넣기 ----------------
@@ -598,6 +599,7 @@ class OriginalImagePanel(SyncedViewport):
         self.brush_btn.setCheckable(True)
         self.brush_btn.setText("🖌")
         self.brush_btn.setToolTip("붓으로 기호 넣기 (B) — 원본에서 빠진 기호를 칠하면 후보를 보여 줍니다\n"
+                                  "주황 점선(읽히지 않은 잉크)을 클릭하면 그 자리를 바로 읽습니다\n"
                                   "Ctrl+휠: 붓 크기 · Esc: 칠한 것 지우고 붓 끄기 · 오른쪽 끌기: 화면 이동")
         self.brush_btn.setFixedSize(38, 38)
         self.brush_btn.setStyleSheet(
@@ -655,7 +657,32 @@ class OriginalImagePanel(SyncedViewport):
         self.cand_bar.show()
         self.cand_bar.raise_()
 
+    def _mark_at(self, pos):
+        """[v4.10] 화면 좌표 pos가 들어 있는 주황 점선 상자(곡 좌표) — 없으면 None. 겹치면 가장 작은 것."""
+        best = None
+        for x, y, w, h in getattr(self, "_ink_marks", None) or []:
+            x0, y0 = self.world_to_widget(x, y)
+            x1, y1 = self.world_to_widget(x + w, y + h)
+            if x0 - 6 <= pos.x() <= x1 + 6 and y0 - 6 <= pos.y() <= y1 + 6:
+                if best is None or w * h < best[2] * best[3]:
+                    best = (x, y, w, h)
+        return best
+
+    def fill_box_strokes(self, x, y, w, h):
+        """[v4.10] 상자를 붓으로 덮어 칠한 것과 같은 붓 자국을 만든다(가로 줄 여러 개). 반환 (자국들, 반지름)."""
+        r = max(3.0, min(self._brush_r, max(w, h) / 2.0 + 2.0))
+        pad = 3.0
+        ys_, yy = [], y - pad + r
+        while yy < y + h + pad - r:
+            ys_.append(yy)
+            yy += r
+        ys_.append(max(y - pad + r, y + h + pad - r))
+        if h + 2 * pad <= 2 * r:
+            ys_ = [y + h / 2.0]
+        return [[(x - pad, v), (x + w + pad, v)] for v in ys_], r
+
     def mousePressEvent(self, event):
+        self._press_pos = event.position() if event.button() == Qt.LeftButton else None
         if getattr(self, "_brush_on", False) and event.button() == Qt.LeftButton:
             self._painting = True
             self.show_candidates([])
@@ -677,6 +704,19 @@ class OriginalImagePanel(SyncedViewport):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        # [v4.10] 끌지 않고 주황 점선 안을 클릭 → 그 상자를 붓으로 칠한 것으로(붓이 꺼져 있어도 켜진다)
+        pp = getattr(self, "_press_pos", None)
+        clicked = (event.button() == Qt.LeftButton and pp is not None
+                   and (event.position() - pp).manhattanLength() < 5)
+        if clicked:
+            mk = self._mark_at(event.position())
+            if mk is not None:
+                self._painting = False
+                self._dragging = False
+                if getattr(self, "_brush_on", False) and self._strokes:
+                    self._strokes.pop()                # 방금 찍힌 점 하나는 버린다
+                self.markClicked.emit(*mk)
+                return
         if getattr(self, "_brush_on", False) and event.button() == Qt.LeftButton and self._painting:
             self._painting = False
             self.brushDone.emit([list(s) for s in self._strokes], float(self._brush_r))
@@ -2327,6 +2367,8 @@ class ScoreEditorWindow(QMainWindow):
         self.image_panel = OriginalImagePanel()
         self.image_panel.pickRequested.connect(self._pick_from_original)
         self.image_panel.brushDone.connect(self._on_brush_done)
+        self.image_panel.markClicked.connect(self._on_mark_clicked)      # [v4.10]
+        self.image_panel.brushToggled.connect(self._on_brush_toggled_marks)
         self.image_panel.candidateChosen.connect(self._apply_brush)
         left_v.addWidget(self.image_panel, 1)
         panels.addWidget(left_card, 1)
@@ -2896,6 +2938,7 @@ class ScoreEditorWindow(QMainWindow):
         self.selected = None
         self.selected_suggestion = None
         self.image_panel.set_image(cv_bgr_to_qpixmap(img), arr=img)
+        self._compute_diff_marks()             # [v4.10] 붓 후보 자리(원본에만 있는 잉크)
         self._refresh_ink_marks()
         self.image_panel.set_highlight(None)
         n_pages = len(getattr(self, "doc_pages", []) or []) or 1
@@ -3611,8 +3654,12 @@ class ScoreEditorWindow(QMainWindow):
         sx, sy = getattr(self, "sx", 1.0), getattr(self, "sy", 1.0)
         boxes = [q["blob"]["box"] for q in (getattr(self.score, "suggestions", None) or [])]
         boxes += [b["box"] for b in (getattr(self.score, "ink_blobs", None) or [])
-                  if b["kind"] in ("dot", "other", "hidden") and b.get("measure") is not None
+                  if b["kind"] in ("dot", "other", "hidden") and b.get("measure") is not None      # "text"는 글자 — 제외
                   and not self._ink_resolved(b)]
+        # [v4.10] 원본과 겹쳐 본 차이(원본에만 있는 잉크)도 붓 후보 자리로 — 이미 표시된 자리와 겹치면 하나만
+        for d in getattr(self, "_diff_marks", None) or []:
+            if not any(d[0] < b[2] and b[0] < d[2] and d[1] < b[3] and b[1] < d[3] for b in boxes):
+                boxes.append(d[:4])
         self.image_panel.set_ink_marks([(x0 * sx, y0 * sy, (x1 - x0) * sx, (y1 - y0) * sy)
                                         for x0, y0, x1, y1 in boxes])
 
@@ -4200,6 +4247,7 @@ class ScoreEditorWindow(QMainWindow):
                 pass
 
     def _after_edit(self, keep):
+        self._diff_dirty = True                # [v4.10] 악보가 바뀜 — 붓 후보 자리는 붓을 다시 켤 때 새로 찾는다
         self._auto_repair([keep])
         self._resync_synthetic_pos(keep)
         self.selected = keep
@@ -4653,6 +4701,50 @@ class ScoreEditorWindow(QMainWindow):
                 "grp_page": [[v - dy for v in s_] for s_ in grp], "heads": heads, "meas": meas,
                 "strokes_page": [[(x / sx, y / sy - dy) for x, y in s_] for s_ in strokes]}
 
+    def _compute_diff_marks(self):
+        """[v4.10] 붓 후보 자리 다시 찾기: 지금 악보를 그려 원본과 겹쳐 보고 원본에만 있는 잉크 덩어리를 표시한다.
+        한 페이지 악보에서만(여러 페이지 악보는 인식 단계의 미인식 잉크 표시만 쓴다). 실패해도 편집은 계속."""
+        self._diff_marks = []
+        self._diff_dirty = False
+        if self.score is None or self.original_bgr is None or getattr(self, "_book_state", None) is not None:
+            return
+        try:
+            from omr_bridge import verify as _vf
+            self._diff_marks = _vf.brush_candidates(
+                self.score, self.original_bgr, self.by_sys, self.sx, self.sy, self.barlines, self.staff_groups,
+                self.staff_left, getattr(self, "staff_clefs", None), getattr(self, "staff_parts", None),
+                self.header_items)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            self._diff_marks = []
+
+    def _on_brush_toggled_marks(self, on):
+        """붓을 켤 때, 편집으로 악보가 바뀌었으면 후보 자리를 다시 찾는다."""
+        if on and getattr(self, "_diff_dirty", True) and self.score is not None:
+            self._compute_diff_marks()
+            self._refresh_ink_marks()
+
+    def _on_mark_clicked(self, x, y, w, h):
+        """[v4.10] 주황 점선(읽히지 않은 잉크 자리)을 클릭 — 그 상자를 붓으로 칠한 것처럼 읽어 후보를 보여 준다."""
+        if self.score is None or self.layout_obj is None:
+            return
+        ip = self.image_panel
+        if not ip._brush_on:
+            ip.set_brush(True)
+        strokes, r = ip.fill_box_strokes(x, y, w, h)
+        # 차이에서 나온 자리면 상자 전체가 아니라 '원본에만 있는 잉크'만 칠한다(옆 음표의 기둥이 섞이지 않게)
+        sx_, sy_ = getattr(self, "sx", 1.0), getattr(self, "sy", 1.0)
+        for d in getattr(self, "_diff_marks", None) or []:
+            if abs(d[0] * sx_ - x) < 1.5 and abs(d[1] * sy_ - y) < 1.5 and len(d) > 5 and d[5]:
+                strokes = [[(a_ * sx_, yy_ * sy_), (b_ * sx_, yy_ * sy_)] for a_, b_, yy_ in d[5]]
+                r = 3.0 * sx_
+                break
+        ip._strokes = [list(s) for s in strokes]
+        ip._painting = False
+        ip.update()
+        self._on_brush_done(strokes, r)
+
     def _on_brush_done(self, strokes, radius):
         if self.score is None or self.layout_obj is None:
             return
@@ -5006,6 +5098,18 @@ class ScoreEditorWindow(QMainWindow):
             for x in mem:
                 x.dotted = True
             target = e
+        # [v4.10] 방금 붓으로 넣은 자리의 후보 표시는 지운다(칠한 영역과 겹치는 차이 표시)
+        try:
+            pts = [p_ for s_ in (self.image_panel._strokes or []) for p_ in s_]
+            if pts and getattr(self, "_diff_marks", None):
+                r_ = float(self.image_panel._brush_r)
+                bx0, bx1 = min(p_[0] for p_ in pts) - r_, max(p_[0] for p_ in pts) + r_
+                by0, by1 = min(p_[1] for p_ in pts) - r_, max(p_[1] for p_ in pts) + r_
+                sx_, sy_ = getattr(self, "sx", 1.0), getattr(self, "sy", 1.0)
+                self._diff_marks = [d for d in self._diff_marks
+                                    if not (d[0] * sx_ < bx1 and bx0 < d[2] * sx_ and d[1] * sy_ < by1 and by0 < d[3] * sy_)]
+        except Exception:
+            pass
         self.image_panel.clear_brush()
         self._after_edit(target)
         extra, self._brush_extra = getattr(self, "_brush_extra", ""), ""

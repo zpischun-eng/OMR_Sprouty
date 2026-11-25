@@ -211,10 +211,12 @@ def build_page(doc, sheet: int = 1) -> PageModel:
         if rest:
             notes.append(f"인식되지 않은 음표 {len(rest)}개를 찾아 주황색 '제안 음표'로 표시했습니다 — "
                          "클릭한 뒤 Enter로 넣기, Delete로 무시: " + ", ".join(q["text"] for q in rest))
-        other = [b for b in blobs if b["kind"] != "head" and b.get("measure") is not None]
+        ik.mark_text_blobs(blobs, list(ctx.get("text_items") or []) + list(ctx.get("header_items") or []),
+                           ctx.get("lyric_tokens"))        # [v4.10] 글자 자리는 붓 후보에서 뺀다
+        other = [b for b in blobs if b["kind"] not in ("head", "text") and b.get("measure") is not None]
         if other:
             notes.append(f"그 밖에 인식되지 않은 기호로 보이는 곳 {len(other)}군데를 원본에 주황 점선으로 "
-                         "표시했습니다(점·임시표 등 — 필요하면 직접 보완)")
+                         "표시했습니다 — 주황 점선을 클릭하면 붓이 그 자리를 읽어 넣을 기호 후보를 보여 줍니다")
     except Exception:
         import traceback
         traceback.print_exc()                      # 부가 기능 — 실패해도 불러오기는 계속

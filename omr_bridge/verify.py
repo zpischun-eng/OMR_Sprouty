@@ -169,6 +169,50 @@ def load_pages(path, progress=None, timeout_sec=900):
         pm.score, list(doc.warnings)
 
 
+def brush_candidates(score, orig_bgr, by_sys, sx, sy, barlines, staff_groups, staff_left, staff_clefs,
+                     staff_parts, header_items):
+    """[v4.10] 붓 후보 자리: 지금 악보를 원본 크기로 그려 원본과 겹쳐 보고, '원본에만 있는 잉크' 덩어리의 상자를
+    돌려준다(원본 그림 좌표 [(x0, y0, x1, y1, 유형)]). 글자(가사·코드 이름·제목)와 글꼴 차이는 일괄 검증과 같은
+    방법으로 뺀다. 자리만 옮겨 그려진 것('moved')과 편집 악보 쪽이 더 많은 덩어리는 후보가 아니다.
+    한 페이지 악보용(편집기에서 불러온 직후·붓을 켤 때 부른다)."""
+    from score import layout as sl, render as sr
+    lay = sl.layout_score_world(score, staves_by_system=by_sys, sx=sx, sy=sy, barlines=barlines,
+                                staff_groups=staff_groups, staff_left_by_line=staff_left,
+                                staff_clefs=staff_clefs, staff_parts=staff_parts)
+    lay.header_items = header_items
+    lay.no_measure_numbers = True
+    oh, ow = orig_bgr.shape[:2]
+    img, lm = sr.render(lay, ow, oh, F=1, return_margin=True)
+    ren = np.array(img.convert("L").crop((lm, 0, lm + ow, oh)))
+    staves = _staves_from_groups(staff_groups, sy)
+    il = _il_of(staff_groups, sy)
+    boxes = [(mb.measure.number, mb.measure.system, mb.bbox[0], mb.bbox[2]) for mb in lay.measure_boxes]
+    pd = PageData(1, _gray(orig_bgr), ren, staves, il, boxes,
+                  _harmony_boxes(score, il, sx, sy, 0.0, oh, header_items))
+    out = []
+    res = diff_page(pd)
+    miss_mask = res["_masks"][2]
+    for b in res["blobs"]:
+        if b["type"] == "moved" or b["miss"] < 0.12 * il * il or b["miss"] < 2 * b["extra"]:
+            continue
+        if b.get("staff_dist", 0) > 6:
+            continue
+        # 그 덩어리의 '원본에만 있는 잉크'를 가로 토막들로(두 줄에 하나) — 붓이 상자 전체가 아니라 그 잉크만 칠하게.
+        # 상자를 통째로 칠하면 옆 음표의 기둥·오선이 섞여 이음줄을 못 읽는다(성가 451번 8마디).
+        x0, y0, x1, y1 = b["x"], b["y"], b["x"] + b["w"], b["y"] + b["h"]
+        sub = miss_mask[y0:y1, x0:x1]
+        runs = []
+        for r in range(0, sub.shape[0], 2):
+            row = sub[r]
+            if not row.any():
+                continue
+            d = np.diff(np.concatenate(([0], row.astype(np.int8), [0])))
+            for s_, e_ in zip(np.nonzero(d == 1)[0], np.nonzero(d == -1)[0]):
+                runs.append((int(x0 + s_), int(x0 + e_ - 1), int(y0 + r)))
+        out.append((x0, y0, x1, y1, b["type"], runs))
+    return out
+
+
 def _harmony_boxes(score, il, sx, sy, dy, h, items=None):
     """코드 이름·악보 안 글자(Fine·빠르기말 등)가 그려지는 자리(페이지 좌표 상자) — 원본에서 읽은 위치 둘레."""
     out = []
