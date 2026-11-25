@@ -151,7 +151,7 @@ def build_page(doc, sheet: int = 1) -> PageModel:
                         continue
                     il_ = (ysg[e_.staff_no - 1][4] - ysg[e_.staff_no - 1][0]) / 4.0
                     if any(b.get("kind") == "head" and b.get("measure") == m_.number
-                           and b.get("staff_no") == e_.staff_no and (b["box"][3] - b["box"][1]) >= 0.8 * il_
+                           and b.get("staff_no") == e_.staff_no and (b["box"][3] - b["box"][1]) >= 0.72 * il_
                            for b in blobs):
                         m_.free_meter = True
                         _nf += 1

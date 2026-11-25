@@ -2569,7 +2569,7 @@ def recover_dropped_notes(score, blobs, gray, staff_groups):
                     continue
                 il_ = (grp_[e.staff_no - 1][4] - grp_[e.staff_no - 1][0]) / 4.0
                 if any(b.get("kind") == "head" and b.get("measure") == m.number and b.get("staff_no") == e.staff_no
-                       and (b["box"][3] - b["box"][1]) >= 0.8 * il_ for b in blobs) \
+                       and (b["box"][3] - b["box"][1]) >= 0.72 * il_ for b in blobs) \
                         and _flag_strokes(gray, e, il_) >= 2:
                     e.duration_base = 16
                     demoted.append(e)
@@ -2592,7 +2592,7 @@ def recover_dropped_notes(score, blobs, gray, staff_groups):
             xs_have = [(e.src_bbox[0] + e.src_bbox[2] / 2.0) for e in mine if e.src_bbox]
             cand = [b for b in blobs if b.get("kind") == "head" and b.get("measure") == m.number
                     and b.get("staff_no") == sn
-                    and (b["box"][3] - b["box"][1]) >= 0.8 * il      # [v4.00] 납작한 조각(빔·글자 토막)은 머리가 아니다
+                    and (b["box"][3] - b["box"][1]) >= 0.72 * il      # [v4.00] 납작한 조각(빔·글자 토막)은 머리가 아니다
                     and all(abs((b["box"][0] + b["box"][2]) / 2.0 - x) > 0.9 * il for x in xs_have)]
             if not cand or len(cand) > 7:
                 continue

@@ -25,7 +25,7 @@
 
 #define MyAppName "콩나물지기"
 ; [v3.21] 버전은 editor_app_qt.py의 APP_VERSION과 맞춘다
-#define MyAppVersion "4.11"
+#define MyAppVersion "4.12"
 #define MyAppPublisher "콩나물지기(OMR_Sprouty)"
 ; [v3.21] 실행 파일 이름 = OMRSprouty_v + 버전(점을 밑줄로) — OMREditor.spec과 같은 규칙
 #define MyAppVerU StringChange(MyAppVersion, ".", "_")
