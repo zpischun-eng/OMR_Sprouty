@@ -1,0 +1,113 @@
+# 맥 배포판 점검 — 실제로 올려 둔 릴리스 zip을 새 맥 OS(macOS 27, Apple 칩)에서 내려받은 것처럼 풀어
+# ① 격리 표시가 붙은 상태에서 맥이 어떻게 판정하는지 ② 격리를 지운 뒤 앱이 켜지는지
+# ③ 앱 안의 파이썬 + Audiveris가 악보 한 장을 실제로 읽는지 확인한다.
+# 화면의 경고 창은 자동으로 누를 수 없으므로, 판정 결과(spctl)와 실행 여부만 본다.
+name: mac-check
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "점검할 릴리스 태그(비우면 가장 새 릴리스)"
+        required: false
+  push:
+    branches: [main]
+    paths: [".github/workflows/mac-check.yml"]
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [xcode-27, macos-26, macos-15]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - name: OS·기종
+        run: |
+          sw_vers
+          uname -m
+          sysctl -n machdep.cpu.brand_string || true
+
+      - name: 릴리스 zip 내려받기 (브라우저로 받은 것처럼 격리 표시 붙이기)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_IN: ${{ github.event.inputs.tag }}
+        run: |
+          TAG="$TAG_IN"
+          if [ -z "$TAG" ]; then
+            TAG=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=1" --jq '.[0].tag_name')
+          fi
+          echo "점검 대상: $TAG"
+          mkdir dl && cd dl
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p "*_Mac_arm64.zip"
+          ls -la
+          Z=$(ls *_Mac_arm64.zip)
+          # 사파리로 받은 파일과 같은 격리 표시(Gatekeeper 검사 대상)
+          xattr -w com.apple.quarantine "0083;$(printf '%x' $(date +%s));Safari;" "$Z"
+          xattr -l "$Z"
+          # Finder의 압축 풀기와 같은 도구(격리 표시가 안의 파일로 이어진다)
+          ditto -x -k "$Z" .
+          D=$(find . -maxdepth 1 -type d -name "OMRSprouty_*" | head -1)
+          echo "DIR=$PWD/${D#./}" >> $GITHUB_ENV
+          ls -la "$D"
+
+      - name: ① 격리 상태에서의 판정 (서명·Gatekeeper)
+        run: |
+          cd "$DIR"
+          APP=$(ls -d OMRSprouty_*.app)
+          echo "== 격리 표시가 이어졌나"
+          xattr -l "$APP" | head -5 || true
+          xattr -l "처음 한 번 실행.command" || true
+          echo "== 서명"
+          codesign -dv --verbose=2 "$APP" 2>&1 | head -12 || true
+          codesign --verify --deep --strict "$APP" 2>&1 | head -5; echo "codesign verify exit=$?"
+          codesign -dv "audiveris/Audiveris.app" 2>&1 | head -8 || true
+          echo "== Gatekeeper 판정(두 번 눌러 열 때의 결과)"
+          spctl --assess --type execute -vv "$APP" 2>&1; echo "spctl app exit=$?"
+          spctl --assess --type execute -vv "audiveris/Audiveris.app" 2>&1; echo "spctl audiveris exit=$?"
+          spctl --status || true
+          echo "== 실행 파일 기종"
+          file "$APP/Contents/MacOS/"* | head -3
+          lipo -archs "$APP/Contents/MacOS/"* 2>/dev/null | head -2 || true
+          echo "== 격리 상태로 바로 실행해 보기(터미널 실행 — Finder와 다를 수 있음)"
+          BIN=$(ls "$APP/Contents/MacOS/"* | head -1)
+          ( "$BIN" --verify /nonexistent --limit 1 > q_run.log 2>&1; echo "exit=$?" >> q_run.log ) &
+          sleep 25; pkill -f "Contents/MacOS/OMRSprouty" || true
+          tail -5 q_run.log || true
+
+      - name: ② '처음 한 번 실행' 도우미가 하는 일(격리 지우기) 뒤 앱 켜기
+        run: |
+          cd "$DIR"
+          APP=$(ls -d OMRSprouty_*.app)
+          bash "처음 한 번 실행.command" > helper.log 2>&1 || true
+          cat helper.log
+          echo "격리 표시 남은 파일 수: $(xattr -r . 2>/dev/null | grep -c com.apple.quarantine || true)"
+          spctl --assess --type execute -vv "$APP" 2>&1; echo "spctl after exit=$?"
+          BIN=$(ls "$APP/Contents/MacOS/"* | head -1)
+          # 창을 띄워 20초 동안 살아 있는지(바로 죽으면 실패)
+          "$BIN" > gui.log 2>&1 &
+          PID=$!
+          sleep 20
+          if kill -0 $PID 2>/dev/null; then echo "GUI: 20초 뒤에도 실행 중 — 정상"; kill $PID; else echo "GUI: 바로 꺼짐"; cat gui.log | tail -30; exit 1; fi
+          tail -5 gui.log || true
+
+      - name: ③ 앱 안의 인식 엔진으로 악보 한 장 읽기
+        run: |
+          cd "$DIR"
+          APP=$(ls -d OMRSprouty_*.app)
+          BIN=$(ls "$APP/Contents/MacOS/"* | head -1)
+          mkdir -p ~/chk
+          IMG=$(find "$APP" -name "demo_song_hires.png" | head -1)
+          echo "시험 악보: $IMG"
+          cp "$IMG" ~/chk/
+          "$BIN" --verify ~/chk --limit 1 --out ~/chk_out 2>&1 | tail -15
+          ls -la ~/chk_out
+          python3 - <<'EOF'
+          import csv, os, sys
+          p = os.path.expanduser("~/chk_out/summary.csv")
+          rows = list(csv.DictReader(open(p, encoding="utf-8-sig")))
+          for r in rows:
+              print(r["file"], r["status"], "마디", r["measures"], "검산", r["measures_ok_pct"], r.get("error", "")[:300])
+          sys.exit(0 if rows and rows[0]["status"] == "ok" else 1)
+          EOF
