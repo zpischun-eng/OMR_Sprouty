@@ -3,7 +3,7 @@
 **어떤 파일을 받나요?**
 - Windows: `Kongnamuljigi_v4.12_Setup.exe` (설치형 — 이전 버전 위에 그대로 설치) 또는 `OMRSprouty_v4_12_Windows.zip` (설치 없이 쓰는 폴더형)
 - 맥(M1 이후 Apple 칩): `OMRSprouty_v4_12_Mac_arm64.zip` · 맥(인텔): `OMRSprouty_v4_12_Mac_x86_64.zip`
-  — 처음 한 번 `처음 한 번 실행.command`를 오른쪽 클릭 → 열기
+  — 처음 한 번: `처음 한 번 실행.command`를 두 번 누르고, 막히면 **시스템 설정 → 개인정보 보호 및 보안 → [그래도 열기]**. 또는 터미널에서 `xattr -cr ` 뒤에 푼 폴더를 끌어다 놓고 Enter ([자세히](https://github.com/zpischun-eng/OMR_Sprouty#맥))
 
 **바뀐 점**
 - (4.12) 교과서 악보에서 빠진 음표 되살리기가 동작하지 않던 문제 수정(v4.00에서 넣은 '납작한 조각 제외' 기준이 교과서의 납작한 머리까지 걸러냄).

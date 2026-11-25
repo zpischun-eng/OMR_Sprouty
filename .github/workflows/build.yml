@@ -202,6 +202,8 @@ jobs:
           # 인터넷에서 받은 앱에 붙는 '격리' 표시를 이 폴더에서만 지운다(콩나물지기와 Audiveris).
           # 지우지 않으면 맥이 "확인되지 않은 개발자" 경고를 띄우거나 악보 인식 엔진 실행을 막는다.
           cd "$(dirname "$0")"
+          chmod -R u+w . 2>/dev/null
+          xattr -drs com.apple.quarantine . 2>/dev/null
           xattr -dr com.apple.quarantine . 2>/dev/null
           echo "준비가 끝났습니다. 이제 콩나물지기 앱을 두 번 눌러 여세요."
           open .
