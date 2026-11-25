@@ -417,6 +417,22 @@ def validate(score: Score) -> dict:
             status = measure_status(m, cap)
             if status == "ok" and _same_stem_lone_conflict(m, cap):
                 status = "over"
+            # [v4.00] 곡 중간의 못갖춘마디: 낭송 마디(자유 리듬)를 사이에 둔 단락의 끝·처음(성가 71번 6·11마디)
+            #   · 낭송 마디 바로 앞 마디가 '곡 첫 못갖춘마디를 꼭 채우는 길이'면 정상(단락 끝 보충)
+            #   · 낭송 마디 바로 뒤 마디가 아주 짧으면(1/3 이하) 새 단락의 못갖춘마디
+            if status == "under" and len(by_voice) <= 1 and all(e.kind == "note" for e in m.elements) \
+                    and not (getattr(m, "unexplained_heads", None) or {}):
+                nxt = score.measures[idx + 1] if idx + 1 < n else None
+                prv = score.measures[idx - 1] if idx > 0 else None
+                # 겹세로줄·도돌이 끝으로 끝나는 단락(Fine 자리 등)도 같다(성가 465번 9마디)
+                if anac and ((nxt is not None and getattr(nxt, "free_meter", False))
+                             or m.end_barline in ("double", "repeat_end", "final")):
+                    f0 = score.measures[0]
+                    if abs(f0.quarter_sum(_capacity_of(score, f0)) + total - cap) < 0.01:
+                        status = "ok"
+                if status == "under" and prv is not None and getattr(prv, "free_meter", False) \
+                        and 0 < total <= cap / 3.0 + 0.01:
+                    status = "ok"
         result[m.number] = (status, round(total, 3), cap)
     return result
 

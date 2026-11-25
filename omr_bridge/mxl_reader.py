@@ -225,6 +225,14 @@ def load_score_music(mxl_path: str) -> ScoreMusic:
                         elif cn in cur_clef:
                             pend_clef.pop(cn, None)
                         cur_clef[cn] = sign
+                        # [v4.00] 높은음자리표 8va(clef-octave-change +1)는 오독으로 본다 — 줄 첫머리로 넘어온
+                        # 붙임줄 끝이 음자리표 위에 걸려 '8'로 읽힌 것(성가 445번 3번째 줄: 한 줄이 통째로 한 옥타브 위).
+                        # 그 음자리표가 유효한 동안 음을 한 옥타브 내려 읽는다. (8vb(-1) 테너 음자리표는 실제로 쓰여 그대로.)
+                        try:
+                            oc = int((c_el.findtext("clef-octave-change") or "0").strip() or 0)
+                        except ValueError:
+                            oc = 0
+                        cur_clef[("oct", cn)] = 1 if (sign == "G" and oc == 1) else 0
                     continue
                 if ch_el.tag == "note" and ch_el.find("chord") is None and pend_clef.get(st_no):
                     clef_info[id(ch_el)] = pend_clef.pop(st_no)
@@ -353,7 +361,7 @@ def load_score_music(mxl_path: str) -> ScoreMusic:
                     pitch_el = note_el.find("pitch")
                     if pitch_el is not None:
                         ev.step = pitch_el.findtext("step")
-                        ev.octave = int(pitch_el.findtext("octave"))
+                        ev.octave = int(pitch_el.findtext("octave")) - cur_clef.get(("oct", st_no), 0)
                     acc_el = note_el.find("accidental")
                     if acc_el is not None and acc_el.text:
                         ev.accidental = acc_el.text  # "sharp"|"flat"|"natural"

@@ -108,8 +108,20 @@ def build_page(doc, sheet: int = 1) -> PageModel:
         n_ph = ik.drop_phantom_heads(score, omr, img, up)
         if n_ph:
             notes.append(f"빔·이음줄 자리를 음표로 잘못 읽은 '유령 음표' {n_ph}개를 지웠습니다")
+        n_tx = ik.drop_notes_in_text(score, list(ctx.get("text_items") or []) + list(ctx.get("header_items") or []),
+                                     groups)                 # [v4.00]
+        if n_tx:
+            notes.append(f"글자(Fine 등)를 음표로 잘못 읽은 {n_tx}개를 지웠습니다")
         ik.assign_stem_dirs(score, img, groups, up)          # 제안 음표의 성부 판단에도 쓴다(먼저)
         blobs = ik.find_unrecognized(img, omr, groups, score, up)
+        # [v4.00] 글자(Fine·D.C. 등) 상자 안의 '머리'는 글자 조각 — 음표 제안에서 뺀다(성가 465번: Fine의 F가 16분음표로)
+        _tb = ik._text_boxes(list(ctx.get("text_items") or []) + list(ctx.get("header_items") or []))
+        if _tb:
+            for b_ in blobs:
+                if b_.get("kind") == "head":
+                    cx_, cy_ = (b_["box"][0] + b_["box"][2]) / 2.0, (b_["box"][1] + b_["box"][3]) / 2.0
+                    if any(a <= cx_ <= c and b <= cy_ <= d for a, b, c, d in _tb):
+                        b_["kind"] = "other"
         ik.attach_to_score(score, blobs)
         score.ink_blobs = blobs
         score.suggestions = ik.make_suggestions(score, blobs, img, groups, up)
@@ -120,7 +132,46 @@ def build_page(doc, sheet: int = 1) -> PageModel:
         if done:
             notes.append(f"인식되지 않은 음표 {len(done)}개를 찾아 자동으로 넣었습니다(넣으면 마디가 정확히 "
                          "맞는 경우만): " + ", ".join(q["text"] for q in done))
+        notes += ik.recover_whole_notes(score, ik._gray(img, up), groups, ctx.get("staff_clefs"))   # [v4.00]
+        # [v4.00] 낭송 마디(한 줄에 마디가 여럿이어도): 온음표가 있는데 읽히지 않은 음표 머리가 더 있다
+        # — 4/4 이하에서 온음표는 마디를 다 채우므로 남는 머리는 낭송 뒤의 가락(성가 71번 7·8·10마디)
+        _nf = 0
+        for m_ in score.measures:
+            if getattr(m_, "free_meter", False) or not getattr(score, "time_sig_known", True):
+                continue
+            if ed._capacity_of(score, m_) > 4.01:
+                continue
+            # 낭송은 한 줄짜리 노래 악보의 것 — 피아노 악보의 온음표 화음을 낭송으로 보지 않게(교회 53마디)
+            if len((groups or {}).get(m_.system) or []) != 1 \
+                    or len({(e.staff_no, e.voice_no) for e in m_.elements}) != 1 \
+                    or any(getattr(e, "chord_group", -1) not in (-1, None) for e in m_.elements):
+                continue
+            for e_ in m_.elements:
+                if e_.kind == "note" and e_.duration_base == 1 and not e_.is_grace:
+                    ysg = (groups or {}).get(m_.system) or []
+                    if e_.staff_no - 1 >= len(ysg):
+                        continue
+                    il_ = (ysg[e_.staff_no - 1][4] - ysg[e_.staff_no - 1][0]) / 4.0
+                    if any(b.get("kind") == "head" and b.get("measure") == m_.number
+                           and b.get("staff_no") == e_.staff_no and (b["box"][3] - b["box"][1]) >= 0.8 * il_
+                           for b in blobs):
+                        m_.free_meter = True
+                        _nf += 1
+                        break
+        if _nf:
+            notes.append(f"낭송 마디(온음표 뒤에 가락이 이어짐) {_nf}마디는 박자 검사를 하지 않습니다")
+        # [v4.00] 낭송 마디에 붙은 박자 바뀜은 다음 마디 것이다(낭송 뒤 세로줄 다음에 찍힌 박자표 — 성가 71번 10→11마디)
+        _ms = sorted(score.measures, key=lambda q: q.number)
+        for i_, m_ in enumerate(_ms[:-1]):
+            if getattr(m_, "free_meter", False) and getattr(m_, "time_sig_change", None) \
+                    and not getattr(_ms[i_ + 1], "time_sig_change", None) \
+                    and not getattr(_ms[i_ + 1], "free_meter", False):
+                _ms[i_ + 1].time_sig_change = m_.time_sig_change
+                _ms[i_ + 1].ts_printed = getattr(m_, "ts_printed", None)
+                m_.time_sig_change = None
+                m_.ts_printed = None
         notes += ik.recover_dropped_notes(score, blobs, ik._gray(img, up), groups)     # [v3.90]
+        notes += ik.recover_arcs(score, ik._gray(img, up), groups)                     # [v4.00] 붙임줄·이음줄
         notes += ik.recover_accidentals(score, ik._gray(img, up), groups)              # [v3.90]
         notes += ik.recover_breath_marks(score, ik._gray(img, up), groups)             # [v3.90]
         try:
@@ -132,6 +183,7 @@ def build_page(doc, sheet: int = 1) -> PageModel:
         notes += ik.split_far_unisons(score, blobs)
         notes += ik.apply_orphan_flags(score, omr, sheet)   # [v2.56] 읽은 꼬리를 길이에(4분 → 8분 등)
         notes += ik.fix_durations_by_ink(score, ik._gray(img, up), groups)   # [v3.62] 머리 속·점 수·꼬리로 길이 확인
+        notes += ik.recover_rests(score, ik._gray(img, up), groups)           # [v4.00] 읽히지 않은 쉼표
         # [v2.70 P-1] 숨은 다른 성부 음(머리 반대쪽으로 설명 안 되는 기둥) → 표시 + 그 마디를 '쉼표 생략'으로 봐주지 않음
         hid = ik.find_hidden_voice_stems(score, ik._gray(img, up), groups, ctx.get("barlines"))
         for h in hid:
@@ -236,11 +288,17 @@ def apply_pdf_time_signatures(score, sigs, staff_groups, barlines, il):
         ms = sorted((m for m in score.measures if m.system == ln), key=lambda m: m.number)
         bars = sorted(barlines.get(ln, []) or [])
         target = None
-        for i, m in enumerate(ms):
-            right = bars[i] if i < len(bars) else 1e12       # 이 마디의 오른쪽 세로줄
-            if right > sg["x1"]:
+        # [v4.00] 박자표보다 오른쪽에 요소가 있는 첫 마디(세로줄 번호로 세면 겹세로줄에서 한 마디 밀렸다 — 성가 71번 24마디)
+        for m in ms:
+            if any(e.src_bbox and e.src_bbox[0] + e.src_bbox[2] / 2.0 >= sg["x0"] - 0.4 * il for e in m.elements):
                 target = m
                 break
+        if target is None:
+            for i, m in enumerate(ms):
+                right = bars[i] if i < len(bars) else 1e12       # 이 마디의 오른쪽 세로줄
+                if right > sg["x1"]:
+                    target = m
+                    break
         if target is None:
             continue
         # 박자표 숫자를 음표로 읽은 것 지우기(그 보표, 박자표 폭 안)
@@ -249,6 +307,13 @@ def apply_pdf_time_signatures(score, sigs, staff_groups, barlines, il):
                               if not (e.kind == "note" and e.src_bbox and e.staff_no == sn
                                       and sg["x0"] - 0.4 * il <= e.src_bbox[0] + e.src_bbox[2] / 2.0 <= sg["x1"] + 0.4 * il)]
         placed.setdefault(target.number, (target, sg["beats"], sg["beat_type"], before - len(target.elements)))
+        target.ts_src_x = (sg["x0"] + sg["x1"]) / 2.0          # [v4.00] 원본에서 박자표가 찍힌 자리(가운데 x)
+        # [v4.00] Audiveris가 같은 박자표를 한 마디 앞(세로줄 앞)에 붙여 둔 것은 지운다
+        for pm in score.measures:
+            if pm.number == target.number - 1 and getattr(pm, "time_sig_change", None) \
+                    and tuple(pm.time_sig_change)[:2] == (sg["beats"], sg["beat_type"]):
+                pm.time_sig_change = None
+                pm.ts_printed = None
     if not placed:
         return []
     ms_all = sorted(score.measures, key=lambda m: m.number)

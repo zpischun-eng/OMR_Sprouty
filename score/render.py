@@ -319,6 +319,9 @@ def render(layout, orig_w, orig_h, F=3, selected=None, header_strips=None,
             acc_gap_h = ss * 0.72
             tx = (clef_x_h + ss * 2.6 + max(0, n_acc_h - 1) * acc_gap_h + ss * 1.7) \
                 if n_acc_h else (clef_x_h + ss * 2.8)
+        _tsx = (getattr(layout, "ts_x", None) or {}).get(m.number)
+        if _tsx is not None:
+            tx = X(_tsx) + ss * TS_SRC_DX            # [v4.00] 원본 자리
         for sm in sys_members:
             sm_lines = _sysline(sm, F)
             sm_top = sm.staff_top * F
@@ -1104,6 +1107,9 @@ def _draw_key_sig(d, kx, top, ss, fifths, clef_k, prev=None, gap=None):
         else:
             _draw_natural(d, x, fy, ss)
     return kx + len(items) * acc_gap
+
+
+TS_SRC_DX = 0.0     # 박자표 그리기 기준점(가운데)과 원본 가운데 x의 차이(칸)
 
 
 def _draw_time_sig_at(d, tx, lines, top, ss, beats, beat_type, ts_symbol=None):

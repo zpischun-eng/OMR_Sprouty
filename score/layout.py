@@ -389,6 +389,11 @@ def layout_score_world(score, staves_by_system, sx, sy, barlines=None, staff_gro
         key_at = getattr(score, "key_at", None)
         sys_fifths = key_at(min(m_.number for m_ in measures)) if key_at else score.fifths
         m_first_ = min(measures, key=lambda m_: m_.number)
+        for m_ in measures:                    # [v4.00] 원본 박자표 자리(가로) — 박자 바뀜을 원본 자리에 그린다
+            if getattr(m_, "ts_src_x", None) is not None:
+                if not hasattr(layout, "ts_x"):
+                    layout.ts_x = {}
+                layout.ts_x[m_.number] = m_.ts_src_x * sx
         sys_ts = getattr(m_first_, "ts_printed", None)
         if sys_ts is not None and getattr(m_first_, "time_sig_change", None):
             sys_ts = None                     # 박자가 바뀌는 줄 첫 마디는 render의 박자 바뀜 그리기가 맡는다
