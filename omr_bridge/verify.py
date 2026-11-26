@@ -126,7 +126,8 @@ def load_pages(path, progress=None, timeout_sec=900):
                     progress(f"{n}/{job.n_pages}쪽 인식")
                 job.process_sheet(n, timeout_sec=timeout_sec)
                 doc = job.page_doc(n)
-                append_page(st, build_page(doc, sheet=n), n,
+                from omr_bridge.book import carry_time as _carry
+                append_page(st, build_page(doc, sheet=n, carry_time=_carry(st)), n,
                             (doc.stacked_bgr.shape[1], doc.stacked_bgr.shape[0]), job.logical_parts(n))
             lay = sl.layout_score_world(st.score, st.by_sys, 1.0, 1.0, st.barlines or None,
                                         staff_groups=st.staff_groups, staff_left_by_line=st.staff_left,

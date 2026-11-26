@@ -31,8 +31,10 @@ class PageModel:
     warnings: list = field(default_factory=list)
 
 
-def build_page(doc, sheet: int = 1) -> PageModel:
-    """DocumentResult 하나(한 페이지)를 편집 모델로 만든다."""
+def build_page(doc, sheet: int = 1, carry_time=None) -> PageModel:
+    """DocumentResult 하나(한 페이지)를 편집 모델로 만든다.
+    carry_time: [v4.20] 여러 페이지 악보에서 앞 페이지 끝의 박자 (beats, beat_type) — 이 페이지 머리에 박자표가
+    없을 때 그 박자를 잇는다(book.carry_time(state))."""
     img = doc.stacked_bgr
     ctx = doc.ctx
     notes = []
@@ -43,6 +45,20 @@ def build_page(doc, sheet: int = 1) -> PageModel:
     score.header_x = dict(ctx.get("header_x") or {})     # [v2.30] 줄 머리 기호 원본 x
     il = ctx["staves"][1] - ctx["staves"][0] if len(ctx.get("staves") or []) > 1 else 20.0
     rec_ = ctx.get("recognition") or {}
+    # [v4.20] 이어지는 페이지: 머리에 박자표가 없고 k마디에서 처음 나온다. 예전엔 그 값을 페이지 머리 박자로 삼아
+    # 책을 이을 때 페이지 첫 마디에 없는 박자 바뀜이 들어갔다(천 개의 바람이 되어 3쪽: 7마디가 통째로 '넘침',
+    # 노래로 배우는 음악사 15마디) — 그리고 이 페이지 안의 검사·보완도 틀린 박자로 했다.
+    # 앞 페이지 끝의 박자(carry_time)를 이 페이지 머리 박자로 쓰고, k마디에는 그 박자표를 '바뀜'으로 적는다.
+    # (마디 길이로 짐작하는 방법은 '교회' 끝 페이지에서 틀렸다 — 박자표 없는 2/4 구간이 앞에 있어서.)
+    _k = rec_.get("time_header_missing")
+    if _k and carry_time and carry_time[0] and carry_time[1]:
+        _mk = next((m for m in score.measures if m.number == _k), None)
+        _tv = rec_.get("time_first_value")
+        if _mk is not None and _tv:
+            score.beats, score.beat_type = int(carry_time[0]), int(carry_time[1])
+            if not _mk.time_sig_change and tuple(_tv) != (score.beats, score.beat_type):
+                _mk.time_sig_change = tuple(_tv)
+            score.ts_header_inferred = True
     pdf_ts = apply_pdf_time_signatures(score, ctx.get("pdf_time_sigs") or [], ctx.get("staff_groups") or {},
                                        barlines, il)
     if pdf_ts:
@@ -82,6 +98,10 @@ def build_page(doc, sheet: int = 1) -> PageModel:
                 n_free += 1
         if n_free:
             notes.append(f"낭송 줄(온음표 하나에 가사 여러 낱말) {n_free}마디는 박자 검사를 하지 않습니다")
+    if not pdf_ts:
+        _hm = ed.fix_header_meter(score)               # [v4.20] 머리 박자표를 반·두 배로 읽은 경우
+        if _hm:
+            notes.append(f"곡 머리 박자표를 마디 길이에 맞춰 {_hm[0]}/{_hm[1]}로 바로잡았습니다(대부분의 마디가 그 길이)")
     ts_added = [] if pdf_ts else ed.infer_missed_time_changes(score, rec_.get("time_printed") or {})
     # [v3.40] 원본에 찍힌 박자표를 마디에 기억 — 줄 첫머리에 다시 찍힌 박자표(값이 같아도)를 원본처럼 그리고,
     # C·₵ 기호면 숫자 대신 기호로
@@ -180,7 +200,7 @@ def build_page(doc, sheet: int = 1) -> PageModel:
         # 붙이는 경우까지 보도록 자동 보완 뒤에
         notes += ik.split_far_unisons(score, blobs)
         notes += ik.apply_orphan_flags(score, omr, sheet)   # [v2.56] 읽은 꼬리를 길이에(4분 → 8분 등)
-        notes += ik.fix_durations_by_ink(score, ik._gray(img, up), groups)   # [v3.62] 머리 속·점 수·꼬리로 길이 확인
+        notes += ik.fix_durations_by_ink(score, ik._gray(img, up), groups, blobs)   # [v3.62] 머리 속·점 수·꼬리로 길이 확인
         notes += ik.recover_rests(score, ik._gray(img, up), groups)           # [v4.00] 읽히지 않은 쉼표
         # [v2.70 P-1] 숨은 다른 성부 음(머리 반대쪽으로 설명 안 되는 기둥) → 표시 + 그 마디를 '쉼표 생략'으로 봐주지 않음
         hid = ik.find_hidden_voice_stems(score, ik._gray(img, up), groups, ctx.get("barlines"))

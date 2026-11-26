@@ -15,7 +15,8 @@ def build(pdf, upto=None):
         if not job.is_done(n):
             break
         doc = job.page_doc(n)
-        pm = build_page(doc, sheet=n)
+        from omr_bridge.book import carry_time
+        pm = build_page(doc, sheet=n, carry_time=carry_time(st))
         append_page(st, pm, n, (doc.stacked_bgr.shape[1], doc.stacked_bgr.shape[0]), job.logical_parts(n))
     return job, st
 

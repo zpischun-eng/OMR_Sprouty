@@ -877,8 +877,17 @@ def build_ctx(omr_path: str, mxl_path: str, original_w: int, original_h: int,
             # (4/4 … 6/8) 첫 줄 박자표까지 6/8로 잘못 나왔다. 첫 마디의 박자를 쓴다.
             # [v3.63] 원본에 박자표가 하나도 없으면 (0, 0) = '박자표 없음'(예전엔 4/4로 채워 그레고리오 성가의
             # 모든 마디가 '넘침'이 되고 원본에 없는 4/4를 그렸다)
+            # [v4.20] 이어지는 페이지(2쪽~)에서 첫 박자표가 첫 마디가 아니라 중간 마디에 있으면, 그 페이지 머리에는
+            # 박자표가 없는 것이다(앞 페이지 박자가 이어짐). 예전엔 중간의 2/4를 페이지 머리 박자로 삼아 책을
+            # 이을 때 그 페이지 첫 마디에 없는 '2/4 바뀜'을 넣었다(천 개의 바람이 되어 3쪽 7마디, 노래로 배우는
+            # 음악사 15마디가 통째로 '넘침'). → '박자표 없음'으로 두면 앞 박자를 그대로 잇는다.
             "time_signature": (music.time_changes[min(music.time_changes)]
                                if music.time_changes else (0, 0)),
+            # 그 페이지 머리에 박자표가 없고 중간 마디에서 처음 나온다(이어지는 페이지) → 첫 박자표가 나온 마디 번호.
+            # page_builder가 그 앞 마디들의 길이로 머리 박자를 짐작하고, 책을 이을 때는 앞 페이지 박자를 잇는다.
+            "time_header_missing": (min(music.time_changes)
+                                    if (sheet > 1 and music.time_changes and min(music.time_changes) != 1) else None),
+            "time_first_value": (music.time_changes[min(music.time_changes)] if music.time_changes else None),
             # [v3.40] 첫 박자표가 C(common)·₵(cut) 기호면 숫자 대신 그 기호로 그린다(예전엔 늘 None → 4/4 숫자)
             "time_symbol": (getattr(music, "time_symbols", {}) or {}).get(min(music.time_changes))
                            if music.time_changes else None,

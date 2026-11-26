@@ -50,6 +50,37 @@ def _capacity_of(score: Score, measure: Measure) -> float:
     return score.capacity()
 
 
+def fix_header_meter(score):
+    """[v4.20] 곡 머리 박자표를 반(또는 두 배)으로 잘못 읽은 경우 바로잡는다(첫사랑: 12/8을 6/8로 읽음).
+    박자 바뀜이 없는 곡에서 가운데 마디의 70% 이상이 같은 길이 L이고 L이 머리 박자의 정확히 2배·1/2이면
+    머리 박자표를 L에 맞춘다. 줄별 용량(target_capacity)이 L과 같은 줄은 표시를 지운다. 반환: 바꿨으면 (박, 단위)."""
+    if not getattr(score, "time_sig_known", True):
+        return None
+    if any(getattr(m, "time_sig_change", None) for m in score.measures):
+        return None
+    ms = sorted(score.measures, key=lambda m: m.number)
+    mid = [m for m in (ms[1:-1] if len(ms) >= 6 else []) if not getattr(m, "free_meter", False)]
+    if len(mid) < 4:
+        return None
+    from collections import Counter
+    lens = Counter(round(free_capacity(m) * 4) / 4.0 for m in mid)
+    q, n = lens.most_common(1)[0]
+    cap = score.capacity()
+    if n < 0.7 * len(mid) or q <= 0 or abs(q - cap) < 0.01:
+        return None
+    ratio = q / cap
+    if not (abs(ratio - 2.0) < 0.01 or abs(ratio - 0.5) < 0.01):
+        return None
+    beats = q * score.beat_type / 4.0
+    if abs(beats - round(beats)) > 0.01 or not (1 <= round(beats) <= 24):
+        return None
+    score.beats = int(round(beats))
+    for m in score.measures:
+        if m.target_capacity is not None and abs(m.target_capacity - q) < 0.01:
+            m.target_capacity = None
+    return score.beats, score.beat_type
+
+
 def infer_implied_meter(score):
     """[v3.63] 박자표가 없을 때: 가운데 마디들(첫·끝 제외)의 길이가 대부분(70% 이상) 같으면 그 길이를 '숨은 박자'로
     보고 검사한다(발췌 악보처럼 박자표만 잘린 경우 — 오류 검사는 계속). 길이가 제각각이면 자유 리듬(마디마다
@@ -336,8 +367,14 @@ def detect_anacrusis(score: Score) -> bool:
         return False
     first_m, last_m = score.measures[0], score.measures[-1]
     cap = _capacity_of(score, first_m)
-    first = first_m.quarter_sum(cap)
-    last = last_m.quarter_sum(_capacity_of(score, last_m))
+
+    def _len(mm, c):
+        # [v4.20] 성부가 여럿이면 성부 길이를 더하지 않고 가장 긴 성부로 본다 — 2부 합창의 못갖춘마디가
+        # (성부 둘의 합으로 계산되어) 인식되지 않았다(아 목동아: 끝 마디 2.5박이 5박으로, 사냥꾼의 합창)
+        bv = mm.quarter_sum_by_voice(c)
+        return max(bv.values()) if len(bv) > 1 else mm.quarter_sum(c)
+    first = _len(first_m, cap)
+    last = _len(last_m, _capacity_of(score, last_m))
     if first <= 0 or first >= cap - 0.01:
         return False
     if abs((first + last) - cap) < 0.01:

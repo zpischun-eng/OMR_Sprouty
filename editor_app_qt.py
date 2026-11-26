@@ -60,7 +60,7 @@ from score import musicxml as mx
 # 오류 수정 = 소수 둘째 자리 (예: 1.00 → 1.10 → 1.11 → 2.00)
 APP_NAME = "콩나물지기"
 APP_ID = "OMR_Sprouty"
-APP_VERSION = "4.13"
+APP_VERSION = "4.20"
 _USER_MSG = "\x00USER\x00"     # [v1.21] 안내 문구만 보여줄 오류 표시(코드 추적 대신)
 
 # [화면 정리 — 실사용 요청] 편집 악보의 음표별 박수·마디 합계 숫자는 가사와 겹치기도 하고,
@@ -2777,7 +2777,16 @@ class ScoreEditorWindow(QMainWindow):
                 try:
                     job.process_sheet(n)
                     doc = job.page_doc(n)
-                    pm = build_page(doc, sheet=n)
+                    # [v4.20] 앞 페이지 끝의 박자를 넘긴다(앞 페이지가 이미 이어 붙여졌을 때만)
+                    _ct = None
+                    try:
+                        from omr_bridge.book import carry_time as _carry
+                        _st = getattr(self, "_book_state", None)
+                        if _st is not None and len(getattr(_st, "pages", []) or []) >= n - 1:
+                            _ct = _carry(_st)
+                    except Exception:
+                        _ct = None
+                    pm = build_page(doc, sheet=n, carry_time=_ct)
                     size = (doc.stacked_bgr.shape[1], doc.stacked_bgr.shape[0])
                     self._bookPage.emit(gen, n, (pm, size, job.logical_parts(n)), None)
                 except Exception:
@@ -2888,7 +2897,8 @@ class ScoreEditorWindow(QMainWindow):
                     if not job.is_done(n):
                         break
                     doc = job.page_doc(n)
-                    append_page(st, build_page(doc, sheet=n), n,
+                    from omr_bridge.book import carry_time as _carry
+                    append_page(st, build_page(doc, sheet=n, carry_time=_carry(st)), n,
                                 (doc.stacked_bgr.shape[1], doc.stacked_bgr.shape[0]), job.logical_parts(n))
                 self._book_gen = getattr(self, "_book_gen", 0) + 1
                 self._book_job, self._book_state, self._book_path = job, st, path

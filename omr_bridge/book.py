@@ -292,6 +292,19 @@ class BookState:
         return sum(h for _w, h in self.page_sizes)
 
 
+def carry_time(state):
+    """[v4.20] 지금까지 이은 악보 끝의 박자 (beats, beat_type) — 다음 페이지를 만들 때 build_page(carry_time=)로 넘긴다.
+    아직 아무 페이지도 없거나 박자를 모르면 None."""
+    sc = getattr(state, "score", None)
+    if sc is None or not getattr(sc, "time_sig_known", True):
+        return None
+    t = (sc.beats, sc.beat_type)
+    for m in sc.measures:
+        if m.time_sig_change:
+            t = tuple(m.time_sig_change)
+    return t
+
+
 def append_page(state: BookState, pm, page_no: int, page_size, sys_logical=None):
     """페이지 모델(pm)을 곡(state) 끝에 잇는다. 좌표는 앞 페이지 높이만큼 아래로, 줄·마디 번호는 이어서."""
     from omr_bridge.document_adapter import PageInfo
@@ -327,7 +340,9 @@ def append_page(state: BookState, pm, page_no: int, page_size, sys_logical=None)
             if m.time_sig_change:
                 prev_t = m.time_sig_change
         if first.time_sig_change is None and getattr(sc, "time_sig_known", True) \
+                and not getattr(sc, "ts_header_inferred", False) \
                 and (sc.beats, sc.beat_type) != prev_t:            # [v3.63] 박자표 없는 페이지는 앞 박자 그대로
+            # [v4.20] ts_header_inferred: 페이지 머리에 박자표가 없어 마디 길이로 짐작한 것 — 앞 박자를 잇는다
             first.time_sig_change = (sc.beats, sc.beat_type)
     # ---- 좌표·번호 옮기기
     for m in sc.measures:

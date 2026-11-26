@@ -1469,7 +1469,7 @@ def find_hidden_voice_stems(score, gray, staff_groups, barlines=None):
 
 
 
-def fix_durations_by_ink(score, gray, staff_groups):
+def fix_durations_by_ink(score, gray, staff_groups, blobs=None):
     """[v3.62] 길이를 잘못 읽어 마디가 '넘침'인 곳을 원본 잉크로 확인해 고친다. 고친 뒤 그 마디가 정확히 맞을
     때만 바꾼다(일괄 검증 — 가톨릭 성가 20곡에서 나온 Audiveris 오인식 유형).
       ① 2분음표인데 머리 속이 꽉 찼다 → 4분음표 (덧줄이 머리를 가로지르는 낮은 C4 등을 빈 머리로 읽음, 54번 7마디)
@@ -1561,6 +1561,110 @@ def fix_durations_by_ink(score, gray, staff_groups):
                 for e in tri:
                     e.in_triplet = True
             continue
+        if st and st[0] in ("under", "over"):
+            # [v4.20] 오선 밖의 가짜 쉼표 + 그 때문에 갈라진 성부: 가사·글자를 쉼표로 읽어(오선 아래 1칸 넘게 벗어난
+            # 쉼표) 둘째 성부를 만들고 진짜 음표 일부를 거기에 넣었다(나무의 노래 3마디). 오선 밖 쉼표를 빼고
+            # 한 줄로 모았을 때 마디가 맞으면 받아들인다.
+            grp_ = (staff_groups or {}).get(m.system) or []
+            ghosts = []
+            for e in m.elements:
+                if e.kind == "rest" and e.src_bbox and e.staff_no - 1 < len(grp_):
+                    ys_ = grp_[e.staff_no - 1]
+                    il_ = (ys_[4] - ys_[0]) / 4.0
+                    cy_ = e.src_bbox[1] + e.src_bbox[3] / 2.0
+                    if cy_ < ys_[0] - 1.0 * il_ or cy_ > ys_[4] + 1.0 * il_:
+                        ghosts.append(e)
+            staffs_multi = {e.staff_no for e in m.elements
+                            if len({x.voice_no for x in m.elements if x.staff_no == e.staff_no and not x.is_grace}) > 1}
+            if ghosts or staffs_multi:
+                saved_els = list(m.elements)
+                saved_v = [(x, x.voice_no) for x in m.elements]
+                for g_ in ghosts:
+                    m.elements.remove(g_)
+                for sn_ in sorted({e.staff_no for e in m.elements}):
+                    try:
+                        ed.merge_split_voices(score, m, sn_)
+                    except Exception:
+                        pass
+                st2 = ed.validate(score).get(m.number)
+                if st2 and st2[0] in ("ok", "anacrusis", "time_change"):
+                    fixed.append(f"{m.number}마디 " + ("오선 밖 가짜 쉼표 지움 + " if ghosts else "") + "갈라진 성부 모음")
+                    continue
+                m.elements[:] = saved_els
+                for x, v_ in saved_v:
+                    x.voice_no = v_
+            # [v4.20] 음표 하나뿐인 '셋째 성부' 흡수: 두 성부 보표(합창)에서 Audiveris가 음표 하나를 따로 떼어
+            # 셋째 성부로 만들었다(사냥꾼의 합창 16·18마디). 그 음표를 같은 보표의 다른 성부로 옮겼을 때
+            # (필요하면 그 성부의 '꼬리 달린 4분음표'를 8분으로 바로잡고) 마디가 맞으면 받아들인다.
+            absorbed = False
+            for sn_ in sorted({e.staff_no for e in m.elements}):
+                vs_ = {}
+                for e in m.elements:
+                    if e.staff_no == sn_ and not e.is_grace:
+                        vs_.setdefault(e.voice_no, []).append(e)
+                if len(vs_) < 3:
+                    continue
+                lones = [es[0] for es in vs_.values() if len(es) == 1 and es[0].kind == "note"]
+                for L in lones:
+                    for v_to, es_to in vs_.items():
+                        if v_to == L.voice_no or len(es_to) < 2:
+                            continue
+                        old_v = L.voice_no
+                        L.voice_no = v_to
+                        ok_ = ed.validate(score).get(m.number, ("",))[0] in ("ok", "anacrusis", "time_change")
+                        if not ok_:
+                            il_q = il_of(m, sn_)
+                            for q in es_to:
+                                if q.kind == "note" and q.duration_base == 4 and not q.dotted and il_q \
+                                        and getattr(q, "beam_group", -1) == -1 and q.src_bbox \
+                                        and (flag_ink(q, il_q) >= 0.16 or _flag_strokes(gray, q, il_q) == 1):
+                                    q.duration_base = 8
+                                    if ed.validate(score).get(m.number, ("",))[0] in ("ok", "anacrusis", "time_change"):
+                                        ok_ = True
+                                        break
+                                    q.duration_base = 4
+                        if ok_:
+                            fixed.append(f"{m.number}마디 따로 떨어진 음표를 제 성부로 옮김")
+                            absorbed = True
+                            break
+                        L.voice_no = old_v
+                    if absorbed:
+                        break
+                if absorbed:
+                    break
+            if absorbed:
+                continue
+            # [v4.20] 없는 점을 읽음: 점음표로 읽혔는데 머리 오른쪽에 점 잉크가 없다. 점을 떼고, 그 때문에 갈라졌던
+            # 성부(뒤따르는 쉼표·음표가 다른 성부로 밀려남)를 한 줄로 모았을 때 마디가 맞으면 받아들인다.
+            # (나무의 노래 3마디: 2분음표 + 4분쉼표 + 8분 둘을 '점2분 + 8분 / 다른 성부 쉼표 + 8분'으로 읽음)
+            done_ = False
+            for e in list(m.elements):
+                if e.kind != "note" or e.is_grace or not e.src_bbox or not e.dotted \
+                        or getattr(e, "double_dot", False) or getattr(e, "chord_group", -1) not in (-1, None):
+                    continue
+                il = il_of(m, e.staff_no)
+                if not il or dots_right(e, il) != 0:
+                    continue
+                # 성부가 갈라져 있을 때만(한 성부 보표에서는 점을 못 찾았다고 떼지 않는다 — 성가 71번 19마디의
+                # 진짜 점8분음표에서 점을 떼어 마디를 '맞춘' 오류가 시험에서 나왔다)
+                if len({x.voice_no for x in m.elements if x.staff_no == e.staff_no and not x.is_grace}) < 2:
+                    continue
+                saved_v = [(x, x.voice_no) for x in m.elements]
+                e.dotted = False
+                try:
+                    ed.merge_split_voices(score, m, e.staff_no)
+                except Exception:
+                    pass
+                st2 = ed.validate(score).get(m.number)
+                if st2 and st2[0] in ("ok", "anacrusis", "time_change"):
+                    fixed.append(f"{m.number}마디 점 뗌(원본에 점이 없음)")
+                    done_ = True
+                    break
+                e.dotted = True
+                for x, v_ in saved_v:
+                    x.voice_no = v_
+            if done_:
+                continue
         if st and st[0] == "under":
             # [v4.00] 점을 놓침: 머리 오른쪽에 점이 찍혀 있는데 점 없는 음표로 읽혀 마디가 '부족'
             # (성가 74번: 붙임줄이 시작되는 점2분음표의 점). 점을 붙였을 때 마디가 정확히 맞으면 붙인다.
@@ -1614,6 +1718,10 @@ def fix_durations_by_ink(score, gray, staff_groups):
                     cands.append((e, "double_to_single"))
             if e.duration_base == 4 and flag_ink(e, il) >= 0.16 and getattr(e, "beam_group", -1) == -1:
                 cands.append((e, "quarter_to_eighth"))
+            elif e.duration_base == 4 and not e.dotted and getattr(e, "beam_group", -1) == -1 \
+                    and _beam_at_stem(gray, e, il):
+                # [v4.20] 빔으로 이어진 8분음표인데 빔을 놓쳐 4분으로 읽힘(노래로 배우는 음악사 63·66마디)
+                cands.append((e, "quarter_to_eighth"))
             # [v4.00] 꼬리가 두 줄인데 8분으로 읽힘(점8분+16분의 16분 — 성가 71번 19·25마디)
             if e.duration_base == 8 and not e.dotted and getattr(e, "beam_group", -1) == -1 \
                     and _flag_strokes(gray, e, il) >= 2:
@@ -1639,6 +1747,15 @@ def fix_durations_by_ink(score, gray, staff_groups):
                 if rr:
                     _repitch_by_ink(score, m, e, gray, staff_groups)       # 머리 자리도 다시 본다(덧줄 위 머리)
                     fixed.append(f"{m.number}마디 2분→4분(머리가 꽉 참) + 쉼표")
+                    break
+            if kind in ("quarter_to_eighth", "eighth_to_sixteenth") and st2 and st2[0] == "under" and blobs:
+                # [v4.20] 길이를 줄이면 모자라지만, 모자란 만큼이 '읽히지 않은 머리'로 채워지면 둘 다 고친다
+                # (교과서: 16분음표 둘 중 하나를 버리고 앞의 8분을 4분으로 읽어 마디가 16분 하나만큼 넘침 —
+                #  나무의 노래 2·4마디, 황금별 5·9·14·21·38마디)
+                rr = recover_dropped_notes(score, blobs, gray, staff_groups, only=m.number)
+                if rr and ed.validate(score).get(m.number, ("",))[0] in ("ok", "anacrusis", "time_change"):
+                    fixed.append(f"{m.number}마디 " + ("4분→8분" if kind == "quarter_to_eighth" else "8분→16분")
+                                 + " + 빠진 음표")
                     break
             if st2 and st2[0] in ("ok", "anacrusis", "time_change"):
                 label = {"half_to_quarter": "2분→4분(머리가 꽉 참)", "double_to_single": "겹점→점(점이 하나)",
@@ -1901,6 +2018,47 @@ def _blob_flag_strokes(gray, box, stem, il):
                 k = 0
         cnts.append(runs)
     return sorted(cnts)[len(cnts) // 2] if cnts else None
+
+
+def _beam_at_stem(gray, e, il):
+    """[v4.20] 기둥 끝에 빔이 붙어 있는가: 기둥 끝에서 왼쪽·오른쪽으로 0.25~1.0칸 구간에, 굵기 0.25칸 이상인
+    잉크 띠가 (기울기 여유 0.35칸으로) 끝에서 끝까지 이어져 있으면 빔. 꼬리는 바깥 끝까지 닿지 않는다."""
+    st_ = getattr(e, "src_stem", None)
+    if not st_ or not e.src_bbox:
+        return False
+    H, W = gray.shape[:2]
+    sx, sy0, sy1 = st_
+    up = (e.src_bbox[1] + e.src_bbox[3] / 2.0) > (sy0 + sy1) / 2.0
+    ty = sy0 if up else sy1
+    ya, yb = (int(ty - 0.5 * il), int(ty + 1.0 * il)) if up else (int(ty - 1.0 * il), int(ty + 0.5 * il))
+    ya, yb = max(0, ya), min(H, yb)
+    if yb - ya < 3:
+        return False
+    pad = max(1, int(0.35 * il))
+    for side in (-1, 1):
+        x_near, x_far = int(sx + side * 0.25 * il), int(sx + side * 1.0 * il)
+        if not (2 <= min(x_near, x_far) and max(x_near, x_far) < W - 2):
+            continue
+
+        def thick_rows(x):
+            col = (gray[ya:yb, x - 1:x + 2] < 140).any(axis=1)
+            out = np.zeros(len(col), bool)
+            n = 0
+            for i, v in enumerate(list(col) + [False]):
+                if v:
+                    n += 1
+                else:
+                    if 0.25 * il <= n <= 0.8 * il:
+                        out[i - n:i] = True
+                    n = 0
+            return out
+        far, near, mid = thick_rows(x_far), thick_rows(x_near), thick_rows(int((x_near + x_far) / 2))
+        if not far.any() or not near.any() or not mid.any():
+            continue
+        far_d = np.convolve(far.astype(np.uint8), np.ones(2 * pad + 1, np.uint8), mode="same") > 0
+        if (near & far_d).any() and (mid & far_d).any():
+            return True
+    return False
 
 
 def _flag_strokes(gray, e, il):
@@ -2476,7 +2634,7 @@ def detect_tail_final(score, gray, staff_groups, barlines):
     return out
 
 
-def recover_dropped_notes(score, blobs, gray, staff_groups):
+def recover_dropped_notes(score, blobs, gray, staff_groups, only=None):
     """[v3.90] Audiveris가 박자표를 잘못 읽고(9/8 → 6/8 등) 그 박자에 넘치는 음표를 내보내지 않은 마디를 되살린다.
     (성가 55번: 9/8을 6/8로 읽어 마디마다 뒤의 8분음표 셋이 통째로 빠짐 — 곡 전체 음표의 절반)
     마디가 '부족'이고 그 보표가 한 성부일 때, 기존 음표와 겹치지 않는 '빠진 머리' 잉크들을 음표로 넣는다.
@@ -2559,6 +2717,8 @@ def recover_dropped_notes(score, blobs, gray, staff_groups):
 
     v_all = ed.validate(score)
     for m in sorted(score.measures, key=lambda q: q.number):
+        if only is not None and m.number != only:
+            continue
         st = v_all.get(m.number)
         free = bool(getattr(m, "free_meter", False))
         # [v4.00] 마디 길이는 맞는데 읽히지 않은 머리가 남아 있다: 16분음표 둘을 8분 하나씩으로 읽고 나머지를 버린 것
