@@ -2050,14 +2050,17 @@ def recover_arcs(score, gray, staff_groups, _dbg=None):
     for m in sorted(score.measures, key=lambda q: q.number):
         for e in sorted(m.elements, key=lambda e: e.src_x or 0):
             order[id(e)] = (m.number, e.src_x or 0, e.staff_no)
-    arc_span = set()
+    arc_spans = []                       # [(지나가는 음표 id 집합, 위쪽인가(모르면 None))]
     for a_ in score.arcs:
         o1, o2 = order.get(id(a_.start)), order.get(id(a_.stop))
         if not o1 or not o2:
             continue
-        for k_, o in order.items():
-            if o[2] == o1[2] and (o1[0], o1[1]) <= (o[0], o[1]) <= (o2[0], o2[1]):
-                arc_span.add(k_)
+        ids_ = {k_ for k_, o in order.items()
+                if o[2] == o1[2] and (o1[0], o1[1]) <= (o[0], o[1]) <= (o2[0], o2[1])}
+        side_ = getattr(a_, "src_above", None)
+        if side_ is None:
+            side_ = getattr(a_, "above", None)
+        arc_spans.append((ids_, side_))
     for sid, ms in by_sys.items():
         grp = (staff_groups or {}).get(sid)
         if not grp:
@@ -2078,10 +2081,6 @@ def recover_arcs(score, gray, staff_groups, _dbg=None):
                 if a.kind != "note" or b.kind != "note":
                     continue
                 if (id(a), id(b)) in linked or a.tie_start or b.tie_stop:
-                    continue
-                # [v4.11] 이미 호가 시작되거나 끝나는 음표는 건드리지 않는다 — Audiveris가 읽은 긴 이음줄(음표 셋 이상)의
-                # 첫 구간을 또 하나의 호로 넣어 두 겹으로 그려졌다(v4.00 전곡 검증: 성가 37·180번)
-                if a.slur_start or b.slur_stop or (id(a) in arc_span) or (id(b) in arc_span):
                     continue
                 ax0, ay0, aw, ah = a.src_bbox
                 bx0, by0, bw, bh = b.src_bbox
@@ -2191,6 +2190,13 @@ def recover_arcs(score, gray, staff_groups, _dbg=None):
                 if _dbg is not None:
                     _dbg.append((_n1, a.step, b.step, best))
                 if best is None:
+                    continue
+                # [v4.11→v4.13] 두 음표를 모두 덮는 기존 호가 같은 쪽(위·아래)에 있으면 그 호의 일부다 — 넣지 않는다
+                # (Audiveris가 읽은 긴 이음줄의 첫 구간을 한 겹 더 넣던 것: 성가 37·180번).
+                # v4.11은 '호가 걸친 음표는 모두 건너뜀'이라 진짜 붙임줄 셋(166·292·422번)까지 놓쳤다 —
+                # 반대쪽에 있는 호(이음줄 아래의 붙임줄 등)는 따로 그려진 것이므로 넣는다.
+                if any(id(a) in ids_ and id(b) in ids_ and (sd_ is None or bool(sd_) == bool(best[1]))
+                       for ids_, sd_ in arc_spans):
                     continue
                 same = (a.step == b.step and a.octave == b.octave and a.alter == b.alter)
                 arc = Arc(start=a, stop=b, kind="tie" if same else "slur", above=best[1])
