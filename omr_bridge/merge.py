@@ -532,7 +532,8 @@ def build_ctx(omr_path: str, mxl_path: str, original_w: int, original_h: int,
         barlines[line_idx] = bars_this_line
         barline_types[line_idx] = types_this_line
         for mid, cap in measure_capacity_override.items():
-            sys_capacity[(line_idx, mid)] = cap
+            if cap and cap > 0.24:        # [v4.21] 0은 용량이 아니다(X표 머리뿐인 손뼉 마디가 섞인 줄 — 독도는 우리 땅 5·6마디)
+                sys_capacity[(line_idx, mid)] = cap
         line_idx += 1
 
     # [붙임줄 신뢰도 필터 — 실사용 검증 후] Audiveris는 8분·16분음표의 꼬리를

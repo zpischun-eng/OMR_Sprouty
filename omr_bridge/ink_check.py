@@ -1572,7 +1572,8 @@ def fix_durations_by_ink(score, gray, staff_groups, blobs=None):
                     ys_ = grp_[e.staff_no - 1]
                     il_ = (ys_[4] - ys_[0]) / 4.0
                     cy_ = e.src_bbox[1] + e.src_bbox[3] / 2.0
-                    if cy_ < ys_[0] - 1.0 * il_ or cy_ > ys_[4] + 1.0 * il_:
+                    # [v4.21] 폭이 0.3칸도 안 되는 '쉼표'도 가짜다(세로 실금 조각 — 도레미 송 25마디: 폭 4~5px)
+                    if cy_ < ys_[0] - 1.0 * il_ or cy_ > ys_[4] + 1.0 * il_ or e.src_bbox[2] < 0.3 * il_:
                         ghosts.append(e)
             staffs_multi = {e.staff_no for e in m.elements
                             if len({x.voice_no for x in m.elements if x.staff_no == e.staff_no and not x.is_grace}) > 1}
@@ -1586,9 +1587,27 @@ def fix_durations_by_ink(score, gray, staff_groups, blobs=None):
                         ed.merge_split_voices(score, m, sn_)
                     except Exception:
                         pass
+                if ghosts:
+                    # 가짜 쉼표 때문에 갈라진 것이면, 가로로 겹치지 않는(한 줄로 이어지는) 음표들은 한 성부다.
+                    # merge_split_voices는 길이가 딱 맞을 때만 모으므로(마디 끝 음표가 빠져 있으면 거절) 직접 모은다.
+                    for sn_ in sorted({e.staff_no for e in m.elements}):
+                        es_ = sorted((e for e in m.elements if e.staff_no == sn_ and not e.is_grace and e.src_bbox),
+                                     key=lambda e: e.src_bbox[0])
+                        if len({e.voice_no for e in es_}) < 2 or len(grp_) < sn_:
+                            continue
+                        il_s = (grp_[sn_ - 1][4] - grp_[sn_ - 1][0]) / 4.0
+                        if all(b_.src_bbox[0] - a_.src_bbox[0] > 0.6 * il_s for a_, b_ in zip(es_, es_[1:])):
+                            v0 = min(e.voice_no for e in es_)
+                            for e in es_:
+                                e.voice_no = v0
                 st2 = ed.validate(score).get(m.number)
+                if st2 and st2[0] == "under" and blobs and ghosts:
+                    # [v4.21] 가짜 쉼표를 빼고 모으니 모자란다 → 모자란 만큼이 읽히지 않은 머리로 채워지면 함께 고친다
+                    # (도레미 송 3·7·9마디: 가짜 쉼표로 성부를 가르고 마디 끝 8분음표를 버림)
+                    recover_dropped_notes(score, blobs, gray, staff_groups, only=m.number)
+                    st2 = ed.validate(score).get(m.number)
                 if st2 and st2[0] in ("ok", "anacrusis", "time_change"):
-                    fixed.append(f"{m.number}마디 " + ("오선 밖 가짜 쉼표 지움 + " if ghosts else "") + "갈라진 성부 모음")
+                    fixed.append(f"{m.number}마디 " + ("가짜 쉼표 지움 + " if ghosts else "") + "갈라진 성부 모음")
                     continue
                 m.elements[:] = saved_els
                 for x, v_ in saved_v:
@@ -1716,6 +1735,10 @@ def fix_durations_by_ink(score, gray, staff_groups, blobs=None):
             if getattr(e, "double_dot", False):
                 if dots_right(e, il) == 1:
                     cands.append((e, "double_to_single"))
+            if e.duration_base == 4 and not e.dotted and getattr(e, "beam_group", -1) == -1 \
+                    and _flag_strokes(gray, e, il) >= 2:
+                # [v4.21] 꼬리가 두 줄인 16분음표를 4분으로 읽음(너의 의미 3·7마디)
+                cands.append((e, "quarter_to_sixteenth"))
             if e.duration_base == 4 and flag_ink(e, il) >= 0.16 and getattr(e, "beam_group", -1) == -1:
                 cands.append((e, "quarter_to_eighth"))
             elif e.duration_base == 4 and not e.dotted and getattr(e, "beam_group", -1) == -1 \
@@ -1735,7 +1758,7 @@ def fix_durations_by_ink(score, gray, staff_groups, blobs=None):
                     x.duration_base = 4
                 elif kind == "double_to_single":
                     x.double_dot = False
-                elif kind == "eighth_to_sixteenth":
+                elif kind in ("eighth_to_sixteenth", "quarter_to_sixteenth"):
                     x.duration_base = 16
                 else:
                     x.duration_base = 8
@@ -1748,23 +1771,61 @@ def fix_durations_by_ink(score, gray, staff_groups, blobs=None):
                     _repitch_by_ink(score, m, e, gray, staff_groups)       # 머리 자리도 다시 본다(덧줄 위 머리)
                     fixed.append(f"{m.number}마디 2분→4분(머리가 꽉 참) + 쉼표")
                     break
-            if kind in ("quarter_to_eighth", "eighth_to_sixteenth") and st2 and st2[0] == "under" and blobs:
+            if kind in ("quarter_to_eighth", "eighth_to_sixteenth", "quarter_to_sixteenth") \
+                    and st2 and st2[0] == "under" and blobs:
                 # [v4.20] 길이를 줄이면 모자라지만, 모자란 만큼이 '읽히지 않은 머리'로 채워지면 둘 다 고친다
                 # (교과서: 16분음표 둘 중 하나를 버리고 앞의 8분을 4분으로 읽어 마디가 16분 하나만큼 넘침 —
                 #  나무의 노래 2·4마디, 황금별 5·9·14·21·38마디)
                 rr = recover_dropped_notes(score, blobs, gray, staff_groups, only=m.number)
                 if rr and ed.validate(score).get(m.number, ("",))[0] in ("ok", "anacrusis", "time_change"):
-                    fixed.append(f"{m.number}마디 " + ("4분→8분" if kind == "quarter_to_eighth" else "8분→16분")
-                                 + " + 빠진 음표")
+                    fixed.append(f"{m.number}마디 " + {"quarter_to_eighth": "4분→8분", "eighth_to_sixteenth": "8분→16분",
+                                                       "quarter_to_sixteenth": "4분→16분"}[kind] + " + 빠진 음표")
                     break
             if st2 and st2[0] in ("ok", "anacrusis", "time_change"):
                 label = {"half_to_quarter": "2분→4분(머리가 꽉 참)", "double_to_single": "겹점→점(점이 하나)",
                          "quarter_to_eighth": "4분→8분(꼬리가 있음)",
-                         "eighth_to_sixteenth": "8분→16분(꼬리가 두 줄)"}[kind]
+                         "eighth_to_sixteenth": "8분→16분(꼬리가 두 줄)",
+                         "quarter_to_sixteenth": "4분→16분(꼬리가 두 줄)"}[kind]
                 fixed.append(f"{m.number}마디 {label}")
                 break
             for x, b, d, dd in saved:
                 x.duration_base, x.dotted, x.double_dot = b, d, dd
+        else:
+            # [v4.21] 하나만 고쳐서는 안 맞는 마디: 빔·꼬리 근거가 있는 음표 둘~셋의 길이를 함께 줄이고, 모자라면
+            # 읽히지 않은 머리로 채운다(너의 의미 3·7·17·19마디: 빔을 놓쳐 16분을 4분·8분으로 읽고 끝의 16분 둘을 버림).
+            import itertools
+            hv = []
+            for e in notes:
+                il = il_of(m, e.staff_no)
+                if not il or e.dotted or getattr(e, "chord_group", -1) not in (-1, None) or e.in_triplet:
+                    continue
+                lv = _beam_at_stem(gray, e, il)
+                nobeam = getattr(e, "beam_group", -1) == -1
+                if e.duration_base == 4 and nobeam and (lv >= 1 or flag_ink(e, il) >= 0.16):
+                    hv.append((e, 16 if lv >= 2 else 8))
+                elif e.duration_base == 8 and (lv >= 2 or (nobeam and _flag_strokes(gray, e, il) >= 2)):
+                    hv.append((e, 16))
+            done_c = False
+            if 2 <= len(hv) <= 6:
+                for size in (2, 3):
+                    for combo in itertools.combinations(hv, size):
+                        saved_c = [(e, e.duration_base) for e, _d in combo]
+                        n_before = len(m.elements)
+                        for e, d_ in combo:
+                            e.duration_base = d_
+                        st2 = ed.validate(score).get(m.number)
+                        if st2 and st2[0] == "under" and blobs:
+                            recover_dropped_notes(score, blobs, gray, staff_groups, only=m.number)
+                            st2 = ed.validate(score).get(m.number)
+                        if st2 and st2[0] in ("ok", "anacrusis", "time_change"):
+                            fixed.append(f"{m.number}마디 음표 {size}개 길이 줄임(빔·꼬리 확인)"
+                                         + (" + 빠진 음표" if len(m.elements) > n_before else ""))
+                            done_c = True
+                            break
+                        for e, d0 in saved_c:
+                            e.duration_base = d0
+                    if done_c:
+                        break
         _ = excess
     return [f"원본 잉크로 확인해 길이를 바로잡았습니다: {', '.join(fixed)}"] if fixed else []
 
@@ -2033,8 +2094,9 @@ def _beam_at_stem(gray, e, il):
     ya, yb = (int(ty - 0.5 * il), int(ty + 1.0 * il)) if up else (int(ty - 1.0 * il), int(ty + 0.5 * il))
     ya, yb = max(0, ya), min(H, yb)
     if yb - ya < 3:
-        return False
+        return 0
     pad = max(1, int(0.35 * il))
+    best = 0
     for side in (-1, 1):
         x_near, x_far = int(sx + side * 0.25 * il), int(sx + side * 1.0 * il)
         if not (2 <= min(x_near, x_far) and max(x_near, x_far) < W - 2):
@@ -2055,10 +2117,21 @@ def _beam_at_stem(gray, e, il):
         far, near, mid = thick_rows(x_far), thick_rows(x_near), thick_rows(int((x_near + x_far) / 2))
         if not far.any() or not near.any() or not mid.any():
             continue
-        far_d = np.convolve(far.astype(np.uint8), np.ones(2 * pad + 1, np.uint8), mode="same") > 0
-        if (near & far_d).any() and (mid & far_d).any():
-            return True
-    return False
+        near_d = np.convolve(near.astype(np.uint8), np.ones(2 * pad + 1, np.uint8), mode="same") > 0
+        mid_d = np.convolve(mid.astype(np.uint8), np.ones(2 * pad + 1, np.uint8), mode="same") > 0
+        ok_rows = far & near_d & mid_d
+        # 줄 수: 바깥 끝 세로줄의 굵은 토막 가운데 기둥까지 이어진 것의 개수(1 = 8분 빔, 2 = 16분 빔)
+        lv, prev, hit = 0, False, False
+        for i, v in enumerate(list(far) + [False]):
+            if v:
+                hit = hit or bool(ok_rows[i])
+            else:
+                if prev and hit:
+                    lv += 1
+                hit = False
+            prev = v
+        best = max(best, lv)
+    return best
 
 
 def _flag_strokes(gray, e, il):
