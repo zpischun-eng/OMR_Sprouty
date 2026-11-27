@@ -25,6 +25,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import help_content as HC              # [v4.40] 기능·단축키 안내(힌트 창·도움말 창 공용)
 import threading
 import time
 from pathlib import Path
@@ -35,7 +36,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
-from PySide6.QtCore import Qt, QPointF, QRectF, Signal, QTimer, QStandardPaths, QSize, QObject, QEvent
+from PySide6.QtCore import Qt, QPointF, QRectF, Signal, QTimer, QStandardPaths, QSize, QObject, QEvent, QPoint, QRect
 from PySide6.QtGui import (
     QPainter, QPen, QColor, QFont, QPixmap, QImage,
     QWheelEvent, QMouseEvent, QKeySequence, QShortcut, QIcon, QAction,
@@ -44,7 +45,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFrame,
     QLabel, QPushButton, QToolButton, QButtonGroup, QFileDialog, QMessageBox, QInputDialog,
     QDialog, QComboBox, QRadioButton, QDialogButtonBox,
-    QLineEdit, QScrollArea, QSizePolicy, QTextEdit, QMenu, QAbstractButton,
+    QLineEdit, QScrollArea, QSizePolicy, QTextEdit, QMenu, QAbstractButton, QTabWidget, QTextBrowser,
 )
 
 from omr import modules  # 볼타/하프핀 등 보조 검출기는 당분간 유지(2단계 범위 밖)
@@ -60,7 +61,7 @@ from score import musicxml as mx
 # 오류 수정 = 소수 둘째 자리 (예: 1.00 → 1.10 → 1.11 → 2.00)
 APP_NAME = "콩나물지기"
 APP_ID = "OMR_Sprouty"
-APP_VERSION = "4.30"
+APP_VERSION = "4.40"
 _USER_MSG = "\x00USER\x00"     # [v1.21] 안내 문구만 보여줄 오류 표시(코드 추적 대신)
 
 # [화면 정리 — 실사용 요청] 편집 악보의 음표별 박수·마디 합계 숫자는 가사와 겹치기도 하고,
@@ -598,14 +599,14 @@ class OriginalImagePanel(SyncedViewport):
         self.brush_btn = QToolButton(self)
         self.brush_btn.setCheckable(True)
         self.brush_btn.setText("🖌")
-        self.brush_btn.setToolTip("붓으로 기호 넣기 (B) — 원본에서 빠진 기호를 칠하면 후보를 보여 줍니다\n"
-                                  "주황 점선(읽히지 않은 잉크)을 클릭하면 그 자리를 바로 읽습니다\n"
-                                  "Ctrl+휠: 붓 크기 · Esc: 칠한 것 지우고 붓 끄기 · 오른쪽 끌기: 화면 이동")
-        self.brush_btn.setFixedSize(38, 38)
+        self.brush_btn.setToolTip(HC.tip("brush", "주황 점선을 클릭하면 그 자리를 바로 읽습니다<br>"
+                                                  "Ctrl+휠: 붓 크기 · Esc: 칠한 것 지우고 붓 끄기 · 오른쪽 끌기: 화면 이동"))
+        self.brush_btn.setFixedSize(32, 28)       # [v4.40] 머리띠 안으로(창이 머리띠에 붙인다)
+        self.brush_btn.setCursor(Qt.PointingHandCursor)
         self.brush_btn.setStyleSheet(
-            "QToolButton { font-size:20px; background:rgba(255,255,255,230); border:1px solid #c9ced6;"
-            " border-radius:8px; } QToolButton:checked { background:#ffd6e8; border:2px solid #e0559b; }")
-        self.brush_btn.move(10, 34)
+            f"QToolButton {{ font-size:15px; background:transparent; border:1px solid {Tokens.BORDER};"
+            f" border-radius:6px; }} QToolButton:hover {{ background:{Tokens.CHIP_BG}; }}"
+            " QToolButton:checked { background:#ffd6e8; border:1px solid #e0559b; }")
         self.brush_btn.toggled.connect(self.set_brush)
         self.cand_bar = QFrame(self)
         self.cand_bar.setStyleSheet("QFrame { background:rgba(255,255,255,240); border:1px solid #c9ced6;"
@@ -654,8 +655,30 @@ class OriginalImagePanel(SyncedViewport):
             b.clicked.connect(lambda _=False, k=key: self.candidateChosen.emit(k))
             self._cand_lay.addWidget(b)
         self.cand_bar.adjustSize()
+        self._place_cand()
         self.cand_bar.show()
         self.cand_bar.raise_()
+
+    def _place_cand(self):
+        """[v4.40] 후보 띠를 칠한 자국 바로 위에(위가 모자라면 아래에) — 창 밖으로 나가지 않게.
+        화면을 옮기거나 확대해도 자국을 따라간다(그릴 때마다 다시 맞춤)."""
+        pts = [p for st in (self._strokes or []) for p in st]
+        bw, bh = self.cand_bar.width(), self.cand_bar.height()
+        if not pts:
+            x, y = 10, 10
+        else:
+            ws = [self.world_to_widget(px, py) for px, py in pts]
+            r = self._brush_r * self.zoom
+            x0, x1 = min(p[0] for p in ws) - r, max(p[0] for p in ws) + r
+            y0, y1 = min(p[1] for p in ws) - r, max(p[1] for p in ws) + r
+            x = (x0 + x1) / 2 - bw / 2
+            y = y0 - bh - 10
+            if y < 6:
+                y = y1 + 10
+        x = max(6, min(self.width() - bw - 6, x))
+        y = max(6, min(self.height() - bh - 6, y))
+        if (int(x), int(y)) != (self.cand_bar.x(), self.cand_bar.y()):
+            self.cand_bar.move(int(x), int(y))
 
     def _mark_at(self, pos):
         """[v4.10] 화면 좌표 pos가 들어 있는 주황 점선 상자(곡 좌표) — 없으면 None. 겹치면 가장 작은 것."""
@@ -785,6 +808,8 @@ class OriginalImagePanel(SyncedViewport):
         self.update()
 
     def paintEvent(self, event):
+        if self.cand_bar.isVisible():            # [v4.40] 후보 띠가 칠한 자리를 따라가게
+            self._place_cand()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.SmoothPixmapTransform, self.zoom < 1.5)
         if self._pixmap is None:
@@ -1173,7 +1198,92 @@ def make_panel_card() -> QFrame:
     return card
 
 
-EDIT_BTN_H = 30            # [v1.41] 하단 편집 막대 버튼 공통 높이
+EDIT_BTN_H = 28            # [v1.41] 하단 편집 막대 버튼 공통 높이 (v4.40: 30 → 28)
+
+_KOR_STEP = {"C": "도", "D": "레", "E": "미", "F": "파", "G": "솔", "A": "라", "B": "시"}
+
+
+def _kor_pitch(e) -> str:
+    """[v4.40] 음 이름(계이름 + 임시표 + 옥타브) — 예: 솔4, 파♯4."""
+    try:
+        return f"{_KOR_STEP.get(e.step, e.step)}{_ACC.get(e.alter or 0, '')}{e.octave}"
+    except Exception:
+        return "—"
+
+
+class ElideLabel(QLabel):
+    """[v4.40] 칸 폭보다 긴 글은 끝을 …으로 줄여 그린다(전체 글은 힌트 창). 칸이 넓어지면 다시 다 보인다."""
+
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self._full = ""
+        self.setMinimumWidth(40)
+        self.setText(text)
+
+    def setText(self, text):
+        self._full = text or ""
+        super().setText(self._full)
+        self.setToolTip(self._full)
+
+    def minimumSizeHint(self):
+        return QSize(40, super().minimumSizeHint().height())
+
+    def paintEvent(self, ev):
+        p = QPainter(self)
+        p.setPen(self.palette().color(self.foregroundRole()))
+        p.setFont(self.font())
+        txt = self.fontMetrics().elidedText(self._full, Qt.ElideRight, self.width())
+        p.drawText(self.rect(), int(Qt.AlignVCenter | Qt.AlignLeft), txt)
+
+
+class PitchSpin(QFrame):
+    """[v4.40] 음높이 스피너 — 가운데에 지금 음 이름, 오른쪽에 작은 ▲▼. 그 위에서 휠을 굴려도 올리고 내린다."""
+    upRequested = Signal()
+    downRequested = Signal()
+
+    def __init__(self, tip="", parent=None):
+        super().__init__(parent)
+        self.setObjectName("pitchSpin")
+        self.setStyleSheet(f"QFrame#pitchSpin {{ background:{Tokens.CARD}; border-radius:6px; }}"
+                           f"QFrame#pitchSpin:disabled {{ background:{Tokens.CHIP_BG}; }}")
+        self.setFixedHeight(EDIT_BTN_H)
+        self.setToolTip(tip)
+        h = QHBoxLayout(self)
+        h.setContentsMargins(8, 2, 2, 2)
+        h.setSpacing(2)
+        self.label = QLabel("—")
+        self.label.setAlignment(Qt.AlignCenter)
+        self.label.setMinimumWidth(40)
+        self.label.setStyleSheet(f"QLabel {{ color:{Tokens.TEXT}; font-weight:700; font-size:12px; background:transparent; }}"
+                                 f"QLabel:disabled {{ color:{Tokens.TEXT_DIM}; }}")
+        h.addWidget(self.label, 1)
+        col = QVBoxLayout()
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(1)
+        for txt, sig in (("▲", self.upRequested), ("▼", self.downRequested)):
+            b = QToolButton()
+            b.setText(txt)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setFixedSize(18, (EDIT_BTN_H - 5) // 2)
+            b.setStyleSheet(f"QToolButton {{ border:none; border-radius:3px; font-size:7px; color:{Tokens.TEXT_DIM};"
+                            f" background:transparent; padding:0; }}"
+                            f"QToolButton:hover {{ background:{Tokens.BORDER}; color:{Tokens.TEXT}; }}")
+            b.setAutoRepeat(True)
+            b.clicked.connect(sig.emit)
+            col.addWidget(b)
+        h.addLayout(col)
+
+    def set_text(self, text):
+        self.label.setText(text or "—")
+
+    def wheelEvent(self, ev):
+        if not self.isEnabled():
+            return
+        d = ev.angleDelta().y()
+        if d:
+            (self.upRequested if d > 0 else self.downRequested).emit()
+        ev.accept()
+
 
 
 def make_chip_group(title: str, buttons: list[QWidget]) -> QFrame:
@@ -1181,13 +1291,13 @@ def make_chip_group(title: str, buttons: list[QWidget]) -> QFrame:
     chip.setObjectName("chip")
     chip.setStyleSheet(f"QFrame#chip {{ background:{Tokens.CHIP_BG}; border-radius:8px; }}")
     v = QVBoxLayout(chip)
-    v.setContentsMargins(12, 8, 12, 8)
-    v.setSpacing(6)
+    v.setContentsMargins(10, 6, 10, 7)
+    v.setSpacing(4)
     label = QLabel(title)
     label.setStyleSheet(f"color:{Tokens.TEXT_DIM}; font-weight:600; font-size:10px; letter-spacing:0.4px;")
     v.addWidget(label)
     row = QHBoxLayout()
-    row.setSpacing(6)
+    row.setSpacing(4)
     for b in buttons:
         # [v1.41 편집 막대 정리] 칸마다 버튼 높이가 제각각이던 것(음표 아이콘 버튼이 더 높았다)을
         # 모두 같은 높이로 맞춘다.
@@ -1356,6 +1466,82 @@ class LyricsFillDialog(QDialog):
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         v.addWidget(bb)
+
+
+class HelpDialog(QDialog):
+    """[v4.40] 도움말(F1) — 기본 흐름 · 화면 구성 · 편집 기능과 단축키 · 붓. 내용은 help_content 한 곳에서."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        import html as _h
+        self.setWindowTitle(f"{APP_NAME} 도움말")
+        self.resize(760, 640)
+        self.setStyleSheet(f"QDialog {{ background:{Tokens.CARD}; }}")
+        v = QVBoxLayout(self)
+        v.setContentsMargins(18, 16, 18, 14)
+        v.setSpacing(10)
+        tabs = QTabWidget()
+        tabs.setDocumentMode(True)
+        tabs.setStyleSheet(
+            f"QTabWidget::pane {{ border:none; border-top:1px solid {Tokens.BORDER}; }}"
+            f"QTabBar::tab {{ background:transparent; color:{Tokens.TEXT_DIM}; padding:7px 14px; border:none;"
+            f" font-weight:600; font-size:12.5px; }}"
+            f"QTabBar::tab:selected {{ color:{Tokens.ACCENT}; border-bottom:2px solid {Tokens.ACCENT}; }}"
+            f"QTabBar::tab:hover {{ color:{Tokens.TEXT}; }}"
+            "QTabBar { qproperty-drawBase: 0; }")
+        css = (f"<style>body {{ color:{Tokens.TEXT}; font-size:12.5px; }}"
+               f"h3 {{ color:{Tokens.ACCENT}; font-size:13.5px; margin:14px 0 6px 0; }}"
+               f"td {{ padding:5px 8px; vertical-align:top; border-bottom:1px solid {Tokens.BORDER}; }}"
+               f".k {{ color:#1a56c4; font-weight:700; white-space:nowrap; }}"
+               f".n {{ font-weight:600; white-space:nowrap; }}"
+               f".d {{ color:{Tokens.TEXT_DIM}; }}</style>")
+
+        def page(body):
+            tb = QTextBrowser()
+            tb.setOpenExternalLinks(True)
+            tb.setFrameShape(QFrame.NoFrame)
+            tb.setStyleSheet(f"QTextBrowser {{ background:{Tokens.CARD}; }}" + FLAT_VSCROLL_CSS)
+            tb.setHtml(css + body)
+            return tb
+
+        e = _h.escape
+        flow = "<h3>기본 흐름</h3><table cellspacing='0' width='100%'>" + "".join(
+            f"<tr><td class='n'>{i + 1}. {e(t)}</td><td>{e(d)}</td></tr>" for i, (t, d) in enumerate(HC.FLOW_STEPS)) + "</table>"
+        parts = "<h3>화면 구성</h3><table cellspacing='0' width='100%'>" + "".join(
+            f"<tr><td class='n'>{e(t)}</td><td>{e(d)}</td></tr>" for t, d in HC.SCREEN_PARTS) + "</table>"
+        tabs.addTab(page(flow + parts), "처음 쓰기")
+
+        def table(keys):
+            rows = []
+            for sk in keys:
+                title = dict(HC.SECTIONS)[sk]
+                rows.append(f"<h3>{e(title)}</h3><table cellspacing='0' width='100%'>")
+                for _k, name, kk, desc in HC.section_rows(sk):
+                    rows.append(f"<tr><td class='n' width='26%'>{e(name)}</td><td class='k' width='24%'>{e(kk)}</td>"
+                                f"<td class='d'>{e(desc)}</td></tr>")
+                rows.append("</table>")
+            return "".join(rows)
+        tabs.addTab(page(table(["select", "pitch", "length", "group", "voice", "edit", "text"])), "편집 기능 · 단축키")
+        brush = ("<h3>붓으로 빠진 기호 넣기</h3>"
+                 "<p>원본에는 있는데 편집 악보에 빠진 기호(이음줄, 쉼표, 셈여림 등)를 넣는 방법입니다.</p>"
+                 "<table cellspacing='0' width='100%'>"
+                 "<tr><td class='n'>1. 붓 켜기</td><td>원본 창 머리띠 오른쪽 끝의 🖌 단추를 누르거나 B 키.</td></tr>"
+                 "<tr><td class='n'>2. 칠하기</td><td>원본 이미지에서 빠진 기호 위를 마우스로 칠합니다.</td></tr>"
+                 "<tr><td class='n'>3. 고르기</td><td>칠한 자리 바로 위에 넣을 기호 후보가 뜹니다. 파란 테두리가 가장 그럴듯한 후보입니다.</td></tr>"
+                 "<tr><td class='n'>주황 점선</td><td>원본에만 있는 잉크 자리입니다. 붓이 꺼져 있어도 클릭하면 그 자리를 바로 읽어 후보를 보여 줍니다.</td></tr>"
+                 "</table>" + table(["brush"]) + table(["file"]))
+        tabs.addTab(page(brush), "붓 · 파일 · 보기")
+        v.addWidget(tabs, 1)
+        row = QHBoxLayout()
+        note = QLabel("버튼에 마우스를 올리면 이름과 단축키가 보입니다.")
+        note.setStyleSheet(f"color:{Tokens.TEXT_DIM}; font-size:11.5px;")
+        row.addWidget(note)
+        row.addStretch(1)
+        close = flat_button("닫기")
+        close.setStyleSheet(close.styleSheet() + f"QPushButton {{ background:{Tokens.CHIP_BG}; padding:6px 18px; font-size:12px; }}")
+        close.clicked.connect(self.accept)
+        row.addWidget(close)
+        v.addLayout(row)
 
 
 class AboutDialog(QDialog):
@@ -1647,6 +1833,101 @@ class TransposeDialog(QDialog):
         return self.combo.currentData(), direction
 
 
+# [v4.40] 플랫한 얇은 스크롤바(화살표 단추 없음) — 옛 윈도 모양의 굵은 막대 대신
+FLAT_SCROLL_H = 6
+FLAT_HSCROLL_CSS = (
+    f"QScrollBar:horizontal {{ height:{FLAT_SCROLL_H}px; background:transparent; margin:2px 4px 0 4px; border:none; }}"
+    "QScrollBar::handle:horizontal { background:rgba(60,64,72,0.22); border-radius:3px; min-width:40px; }"
+    "QScrollBar::handle:horizontal:hover { background:rgba(60,64,72,0.40); }"
+    "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width:0; height:0; border:none; background:none; }"
+    "QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background:none; }")
+FLAT_VSCROLL_CSS = (
+    "QScrollBar:vertical { width:8px; background:transparent; margin:4px 2px 4px 0; border:none; }"
+    "QScrollBar::handle:vertical { background:rgba(60,64,72,0.22); border-radius:3px; min-height:40px; }"
+    "QScrollBar::handle:vertical:hover { background:rgba(60,64,72,0.40); }"
+    "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { width:0; height:0; border:none; background:none; }"
+    "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background:none; }")
+
+
+class FlatToolTip(QObject):
+    """[v4.40] 힌트 창을 마우스 자리가 아니라 '버튼 기준'으로 띄운다 — 마우스 포인터가 커도 글을 가리지 않게.
+    창의 아래쪽 절반에 있는 위젯은 위젯 위로, 위쪽 절반은 위젯 아래로 띄우고 10px 띄운다.
+    QApplication에 이벤트 필터로 한 번 건다. 위젯이 스스로 힌트를 처리하는 경우(toolTip()이 빈 글)는 건드리지 않는다."""
+    GAP = 10
+
+    def __init__(self, app):
+        super().__init__(app)
+        self._lbl = QLabel(None, Qt.ToolTip | Qt.FramelessWindowHint)
+        self._lbl.setAttribute(Qt.WA_ShowWithoutActivating)
+        self._lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._lbl.setTextFormat(Qt.RichText)
+        self._lbl.setWordWrap(False)
+        self._lbl.setStyleSheet("QLabel { background:#2b2f36; color:#f2f4f7; border:none; border-radius:6px;"
+                                " padding:6px 10px; font-size:12px; }")
+        self._target = None
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self.hide)
+        app.installEventFilter(self)
+
+    def hide(self):
+        self._lbl.hide()
+        self._target = None
+
+    @staticmethod
+    def _rich(text):
+        import html as _h
+        if text.lstrip().startswith("<"):
+            return text
+        return _h.escape(text).replace("\n", "<br>")
+
+    def show_for(self, w):
+        text = w.toolTip()
+        self._lbl.setText(self._rich(text))
+        self._lbl.setMaximumWidth(460)
+        self._lbl.setWordWrap(False)
+        self._lbl.adjustSize()
+        if self._lbl.width() >= 460:              # 아주 긴 글은 줄을 바꾼다
+            self._lbl.setWordWrap(True)
+            self._lbl.setFixedWidth(460)
+            self._lbl.adjustSize()
+        else:
+            self._lbl.setMinimumWidth(0)
+            self._lbl.setMaximumWidth(16777215)
+        tw, th = self._lbl.width(), self._lbl.height()
+        top_left = w.mapToGlobal(QPoint(0, 0))
+        r = QRect(top_left, w.size())
+        win = w.window()
+        wr = QRect(win.mapToGlobal(QPoint(0, 0)), win.size())
+        above = r.center().y() > wr.center().y()
+        x = r.center().x() - tw // 2
+        y = r.top() - th - self.GAP if above else r.bottom() + self.GAP
+        scr = (w.screen() or QApplication.primaryScreen()).availableGeometry()
+        x = max(scr.left() + 4, min(scr.right() - tw - 4, x))
+        if y < scr.top() + 4:
+            y = r.bottom() + self.GAP
+        if y + th > scr.bottom() - 4:
+            y = r.top() - th - self.GAP
+        self._lbl.move(x, y)
+        self._lbl.show()
+        self._lbl.raise_()
+        self._target = w
+        self._timer.start(12000)
+
+    def eventFilter(self, obj, ev):
+        t = ev.type()
+        if t == QEvent.ToolTip and isinstance(obj, QWidget):
+            if obj.isWindow() or not obj.toolTip():
+                return False
+            self.show_for(obj)
+            return True
+        if self._target is not None:
+            if ((t in (QEvent.Leave, QEvent.Hide) and obj is self._target)
+                    or t in (QEvent.MouseButtonPress, QEvent.Wheel, QEvent.KeyPress, QEvent.WindowDeactivate)):
+                self.hide()
+        return False
+
+
 class HScrollWrap(QScrollArea):
     """[v3.91] 도구 막대를 감싸는 가로 스크롤 틀 — 창이 막대의 최소 폭보다 좁아지면 가로 스크롤바가 생긴다.
     (아래 편집 막대의 최소 폭이 약 1900px이라 창을 그보다 좁힐 수 없었다 — FHD 화면에서 창 크기 조절이 안 됨)"""
@@ -1661,14 +1942,14 @@ class HScrollWrap(QScrollArea):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self.setStyleSheet("QScrollArea { background: transparent; } "
-                           "QScrollArea > QWidget > QWidget { background: transparent; }")
+                           "QScrollArea > QWidget > QWidget { background: transparent; }" + FLAT_HSCROLL_CSS)
         self.viewport().setAutoFillBackground(False)
         self._fit()
 
     def _fit(self):
         h = max(self._inner.minimumSizeHint().height(), self._inner.sizeHint().height(), self._inner.minimumHeight())
         if self.width() < self._inner.minimumSizeHint().width():
-            h += self.horizontalScrollBar().sizeHint().height()
+            h += FLAT_SCROLL_H + 2
         if self.height() != h:
             self.setFixedHeight(h)
 
@@ -1692,6 +1973,7 @@ class TopToolbar(QFrame):
     exportMidiRequested = Signal()     # [2단계] .mid 파일 내보내기
     fitToScreenRequested = Signal()
     aboutRequested = Signal()          # [5단계] 프로그램 정보/라이선스
+    helpRequested = Signal()           # [v4.40] 도움말(F1)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1715,16 +1997,17 @@ class TopToolbar(QFrame):
         cap_layout.setContentsMargins(4, 4, 4, 4)
         cap_layout.setSpacing(0)
 
-        actions = [
-            ("악보 열기", self.openImageRequested, "악보 이미지/PDF 파일 열기 (Ctrl+O)"),
-            ("저장", self.saveRequested, "편집한 악보를 원본 옆에 같은 이름(.sprouty)으로 저장 — 다음에 열 때 이어서 편집 (Ctrl+S)"),
-            ("MusicXML 내보내기", self.exportMusicXmlRequested, "편집 결과를 MusicXML 로 저장 (Ctrl+E)"),
-            ("MIDI 내보내기", self.exportMidiRequested, "편집 결과를 MIDI(.mid) 로 저장"),
-            ("▶ 재생", self.playRequested, "악보를 소리로 재생하며 검수 (Space)"),
-            ("조바꿈", self.transposeRequested, "악보 전체를 다른 조로 옮기기 (Ctrl+T)"),
-            ("곡 정보", self.songInfoRequested, "제목·작사/작곡·빠르기말 입력/수정"),
-            ("화면 맞춤", self.fitToScreenRequested, "이미지를 화면에 맞춤 (F)"),
-            ("정보", self.aboutRequested, "프로그램 정보 및 라이선스"),
+        actions = [                                    # [v4.40] 힌트 글은 help_content 한 곳에서
+            ("악보 열기", self.openImageRequested, HC.tip("open")),
+            ("저장", self.saveRequested, HC.tip("save")),
+            ("MusicXML 내보내기", self.exportMusicXmlRequested, HC.tip("export_xml")),
+            ("MIDI 내보내기", self.exportMidiRequested, HC.tip("export_midi")),
+            ("▶ 재생", self.playRequested, HC.tip("play")),
+            ("조바꿈", self.transposeRequested, HC.tip("transpose")),
+            ("곡 정보", self.songInfoRequested, HC.tip("song_info")),
+            ("화면 맞춤", self.fitToScreenRequested, HC.tip("fit")),
+            ("정보", self.aboutRequested, HC.tip("about")),
+            ("도움말", self.helpRequested, HC.tip("help")),
         ]
         self.play_btn = None
         for idx, (label, signal, tip) in enumerate(actions):
@@ -1736,7 +2019,7 @@ class TopToolbar(QFrame):
             btn.setCursor(Qt.PointingHandCursor)
             border = f"border-right:1px solid {Tokens.BORDER};" if idx < len(actions) - 1 else ""
             btn.setStyleSheet(
-                f"QToolButton {{ border:none; {border} border-radius:0; padding:10px 16px; "
+                f"QToolButton {{ border:none; {border} border-radius:0; padding:10px 13px; "
                 f"font-weight:600; font-size:13px; color:{Tokens.TEXT}; background:transparent; }}"
                 f"QToolButton:hover {{ background:{Tokens.CHIP_BG}; }}"
             )
@@ -1747,7 +2030,7 @@ class TopToolbar(QFrame):
                 self.chord_btn = QToolButton()
                 self.chord_btn.setText("코드 반주")
                 self.chord_btn.setCheckable(True)
-                self.chord_btn.setToolTip("재생·MIDI에 기타 코드 반주를 넣습니다(켜기/끄기)")
+                self.chord_btn.setToolTip(HC.tip("chord_accomp"))
                 self.chord_btn.setCursor(Qt.PointingHandCursor)
                 self.chord_btn.setStyleSheet(
                     f"QToolButton {{ border:none; border-right:1px solid {Tokens.BORDER}; border-radius:0; "
@@ -1827,153 +2110,77 @@ class BottomEditBar(QFrame):
         )
 
         outer = QHBoxLayout(self)
-        outer.setContentsMargins(20, 16, 20, 16)
-        outer.setSpacing(12)                 # [v2.20] 아티큘레이션 칸이 늘어 1920 화면에 맞게 줄임
+        outer.setContentsMargins(12, 8, 12, 8)
+        outer.setSpacing(6)
+        tip = HC.tip
 
-        # --- 좌측: 조표 · 박자표 정보 ---
-        sig_chip = QFrame()
-        sig_chip.setObjectName("chip")
-        sig_chip.setStyleSheet(f"QFrame#chip {{ background:{Tokens.CHIP_BG}; border-radius:8px; }}")
-        sig_layout = QVBoxLayout(sig_chip)
-        sig_layout.setContentsMargins(16, 10, 16, 10)
-        sig_layout.setSpacing(3)
-        sig_caption = QLabel("조표 · 박자표")
-        sig_caption.setStyleSheet("color:#9a9aa2; font-size:11px;")
+        # [v4.40 화면 정리] 조표·박자표와 고른 요소 정보는 편집 악보 창 머리띠로 옮겼다(글이 잘리던 칸).
+        # 글자 칸은 여기서 만들고, 창(ScoreEditorWindow)이 머리띠에 붙인다.
         self.sig_label = QLabel("—")
-        self.sig_label.setStyleSheet(
-            f"color:{Tokens.ACCENT}; font-weight:700; font-size:14.5px;")
-        self.sig_label.setMinimumWidth(150)
-        sig_layout.addWidget(sig_caption)
-        sig_layout.addWidget(self.sig_label)
-        outer.addWidget(sig_chip, 0)
+        self.sig_label.setStyleSheet(f"color:{Tokens.ACCENT}; font-weight:700; font-size:12.5px; background:transparent;")
+        self.selected_label = ElideLabel("클릭해 선택")
+        self.selected_label.setStyleSheet(f"color:{Tokens.TEXT}; font-weight:600; font-size:12.5px; background:transparent;")
 
-        # --- 좌측: 선택 요소 정보 ---
-        info_chip = QFrame()
-        info_chip.setObjectName("chip")
-        info_chip.setStyleSheet(f"QFrame#chip {{ background:{Tokens.CHIP_BG}; border-radius:8px; }}")
-        info_layout = QVBoxLayout(info_chip)
-        info_layout.setContentsMargins(16, 10, 16, 10)
-        info_layout.setSpacing(3)
-        caption = QLabel("선택 요소")
-        caption.setStyleSheet("color:#9a9aa2; font-size:11px;")
-        self.selected_label = QLabel("요소를 클릭하면 여기에 정보가 표시됩니다")
-        self.selected_label.setStyleSheet(
-            f"color:{Tokens.TEXT}; font-weight:600; font-size:14.5px;")
-        self.selected_label.setMinimumWidth(180)    # [v2.20] 긴 글은 …으로 줄이고 툴팁에 전체
-        self.selected_label.setMaximumWidth(200)
-        info_layout.addWidget(caption)
-        info_layout.addWidget(self.selected_label)
-        outer.addWidget(info_chip, 0)
-
-        # --- 우측: 버튼 그룹들 ---
         groups = QHBoxLayout()
-        groups.setSpacing(8)
+        groups.setSpacing(6)
 
-        up_btn = flat_button("↑", tip="음 올림  (↑)")
-        down_btn = flat_button("↓", tip="음 내림  (↓)")
-        up_btn.clicked.connect(self.pitchUpRequested.emit)
-        down_btn.clicked.connect(self.pitchDownRequested.emit)
-        acc_btn = flat_button("♯♭♮", tip="임시표 순환 ♯→♭→♮→없음  (A)")
+        # ── 음높이: ▲▼ 두 버튼 대신 지금 음 이름을 보여 주는 스피너 하나 + 임시표
+        self.pitch_spin = PitchSpin(tip("pitch"))
+        self.pitch_spin.upRequested.connect(self.pitchUpRequested.emit)
+        self.pitch_spin.downRequested.connect(self.pitchDownRequested.emit)
+        acc_btn = flat_button("♯♭♮", tip=tip("accidental"))
         acc_btn.clicked.connect(self.accidentalToggleRequested.emit)
-        self.pitch_btns = [up_btn, down_btn, acc_btn]  # [3-B]
+        aci = _accidental_cycle_icon()
+        if aci is not None:
+            acc_btn.setText("")
+            acc_btn.setIcon(aci)
+            acc_btn.setIconSize(QSize(34, 20))
+        acc_btn.setFixedWidth(44)
+        self.pitch_btns = [self.pitch_spin, acc_btn]
         groups.addWidget(make_chip_group("음높이", self.pitch_btns))
 
+        # ── 음표: 자주 쓰는 기능이라 작은 버튼 그대로(누른 상태로 지금 길이가 보인다)
         keyhint = {1: "1", 2: "2", 4: "3", 8: "4", 16: "5", 32: "6"}
         self._dur_buttons: dict[int, QPushButton] = {}
         dur_widgets = []
         for base in ed.DURATION_CHOICES:
-            btn = flat_button(_DUR_LABEL[base],
-                              tip=f"{_DUR_NAME[base]}음표/쉼표  ({keyhint[base]})")
+            btn = flat_button(_DUR_LABEL[base], tip=f"<qt><b>{_DUR_NAME[base]}음표 · 쉼표</b>&nbsp;&nbsp;"
+                                                    f"<span style='color:#9fb4d9'>{keyhint[base]}</span></qt>")
             icon = _note_icon(base)
-            if icon is not None:              # 악보 글꼴이 있으면 숫자 대신 음표 모양
+            if icon is not None:
                 btn.setText("")
                 btn.setIcon(icon)
-                btn.setIconSize(QSize(26, 26))
             btn.setCheckable(True)
             btn.clicked.connect(lambda _=False, b=base: self.durationSelected.emit(b))
             self._dur_buttons[base] = btn
             dur_widgets.append(btn)
-        self.dot_btn = flat_button("", tip="점 → 겹점 → 없음 순서로 바꾸기  (.)")
-        self.dot_btn.setIcon(_dot_icon())             # [v1.41] 점(.) 하나만
-        self.dot_btn.setIconSize(QSize(22, 22))
+        self.dot_btn = flat_button("", tip=tip("dot"))
+        self.dot_btn.setIcon(_dot_icon())
         self.dot_btn.setCheckable(True)
         self.dot_btn.clicked.connect(self.dotToggleRequested.emit)
         dur_widgets.append(self.dot_btn)
-        groups.addWidget(make_chip_group("음표", dur_widgets))
-        # [v2.11 버튼 크기 맞추기 — 실사용] 음표 버튼(50px)이 음높이 버튼(30px)보다 넓어 뚱뚱해 보였고, 아이콘
-        # 크기도 달랐다. 두 칸의 버튼 폭을 같게(36px), 음표 아이콘은 20px, 음높이 화살표 글자는 그만큼 키운다.
-        for b in self.pitch_btns + dur_widgets:
-            b.setFixedWidth(36)
         for b in dur_widgets:
-            if not b.icon().isNull():
-                b.setIconSize(QSize(20, 20))
-        for b in self.pitch_btns[:2]:
-            b.setStyleSheet(b.styleSheet() + "QPushButton { font-size:16px; padding:0px; }")
-        aci = _accidental_cycle_icon()                    # [v2.23] ♯♭♮ 아이콘(넓게·크게)
-        if aci is not None:
-            self.pitch_btns[2].setText("")
-            self.pitch_btns[2].setIcon(aci)
-            self.pitch_btns[2].setIconSize(QSize(42, 28))
-        self.pitch_btns[2].setFixedWidth(54)
+            b.setFixedWidth(30)
+            b.setIconSize(QSize(18, 18))
+        groups.addWidget(make_chip_group("음표", dur_widgets))
 
-        # [UI 재구성] 이전에는 8분/16분/32분 버튼 3개(세그먼트 토글)였는데,
-        # 버튼 하나로 줄이고 클릭할 때마다 8→16→32→8...로 순환하게 바꿔
-        # 확보한 공간을 아래 이음줄/붙임줄/셋잇단음표 편집에 쓴다(실사용
-        # 요청 — UI가 계속 늘어나면 "간단한 앱"이라는 미학이 깨진다는
-        # 우려에 대한 절충).
+        # ── 묶음·표현: 빔 · 이음 · 잇단 · 셈여림 · 표현▾
+        #    (크레셴도 버튼 둘은 뺐다 — 셈여림 메뉴, < > 단축키, 붓으로 그대로 넣을 수 있다)
         self._beam_cycle = [8, 16, 32]
         self._beam_cycle_idx = 0
-        self.beam_btn = flat_button("빔↻", tip="음표 1개: 빔그룹 전체 박자 순환 8→16→32→8… · "
-                                              "여러 개: 빔으로 묶기/풀기  (7)")
+        self.beam_btn = flat_button("빔", tip=tip("beam"))
         self.beam_btn.clicked.connect(self.beamGroupCycleRequested.emit)
-        # [크레셴도/디크레셴도 버튼 — 실사용 요청] 셈여림 메뉴 안에만 있어 찾기 어렵다는 지적.
-        # 넓게 늘어나 있던 빔그룹 칸에 함께 둔다. 2개 이상 선택 → 만들기, 쐐기 안의 음표를 골라
-        # 다시 누르기 → 지우기. 키보드 < / > 와 같은 동작.
-        self.cresc_btn = flat_button("", tip="크레셴도: 2개 이상 선택해 만들기 · 쐐기 안 음표를 골라 다시 누르면 지우기  (<)")
-        self.cresc_btn.setIcon(_hairpin_icon("cresc"))      # [v1.41] 글자 없이 긴 부등호
-        self.cresc_btn.setIconSize(QSize(40, 14))
-        self.cresc_btn.setMinimumWidth(48)
-        self.cresc_btn.clicked.connect(lambda: self.dynamicActionRequested.emit("cresc"))
-        self.decresc_btn = flat_button("", tip="디크레셴도: 2개 이상 선택해 만들기 · 쐐기 안 음표를 골라 다시 누르면 지우기  (>)")
-        self.decresc_btn.setIcon(_hairpin_icon("decresc"))
-        self.decresc_btn.setIconSize(QSize(40, 14))
-        self.decresc_btn.setMinimumWidth(48)
-        self.decresc_btn.clicked.connect(lambda: self.dynamicActionRequested.emit("decresc"))
-        groups.addWidget(make_chip_group("빔그룹 · 크레셴도",
-                                         [self.beam_btn, self.cresc_btn, self.decresc_btn]))
-        self.beam_btn.setText("")                             # [v2.22] 기둥+빔 아이콘
-        self.beam_btn.setIcon(_stems_beams_icon(2))
-        self.beam_btn.setFixedWidth(40)
-        self.beam_btn.setIconSize(QSize(26, 26))
-
-        # [편집 기능 추가] Audiveris가 음정·기본 박자는 매우 정확해도
-        # 이음줄/붙임줄/셋잇단음표는 이따금 오인식한다(실사용 검증:
-        # "여정" 샘플에서 결정적으로 재현). 다중 선택했을 때 그 조합에
-        # 실제로 적용 가능한 것만 활성화되고, 클릭/단축키로 있으면
-        # 지우고 없으면 만드는 토글 방식이다.
-        # [편집 기능 추가] Audiveris가 음정·기본 박자는 매우 정확해도
-        # 이음줄/붙임줄/셋잇단음표는 이따금 오인식한다(실사용 검증:
-        # "여정" 샘플에서 결정적으로 재현). 다중 선택했을 때 그 조합에
-        # 실제로 적용 가능한 것만 활성화되고, 클릭/단축키로 있으면
-        # 지우고 없으면 만드는 토글 방식이다.
-        #
-        # [버튼 통합 — 실사용 요청] "붙임줄"/"이음줄" 두 버튼이 영역
-        # 이름(이음/셋잇단)과 중복돼 UI가 번잡하다는 지적을 받아 하나로
-        # 합쳤다 — 선택한 두 음의 음정이 같으면 자동으로 붙임줄, 다르면
-        # 이음줄로 판정해 적용한다.
-        self.bond_btn = flat_button("이음", tip="선택한 두 음표 사이 이음/붙임줄 토글 — 음정이 같으면 "
-                                               "붙임줄, 다르면 이음줄로 자동 판정  (T)")
+        self.bond_btn = flat_button("이음", tip=tip("bond"))
         self.bond_btn.clicked.connect(self.bondToggleRequested.emit)
-        # [잇단음표 일반화] 분할 버튼: 누르면 셋잇단, ▾를 누르면 5·6·7·2·4잇단/해제 메뉴.
-        # 음표 1개 선택이면 그 음을 쪼개고(4분→셋잇단 8분 3개), 여러 개 선택이면 표시만 고친다.
         self.triplet_btn = QToolButton()
         self.triplet_btn.setText("잇단")
-        self.triplet_btn.setToolTip("음표 1개: 잇단음표로 쪼개기 · 여러 개: 잇단음표 표시/해제  "
-                                    "(Y=셋잇단, Ctrl+3/5/6/7/2/4)")
+        self.triplet_btn.setToolTip(tip("tuplet"))
         self.triplet_btn.setPopupMode(QToolButton.MenuButtonPopup)
         self.triplet_btn.setCheckable(True)
         self.triplet_btn.setCursor(Qt.PointingHandCursor)
-        self.triplet_btn.setStyleSheet(flat_button("x").styleSheet().replace("QPushButton", "QToolButton"))
+        self.triplet_btn.setStyleSheet(flat_button("x").styleSheet().replace("QPushButton", "QToolButton")
+                                       + "QToolButton { padding:2px 14px 2px 4px; }"
+                                         "QToolButton::menu-button { width:12px; border:none; }")
         self.tup_menu = QMenu(self.triplet_btn)
         for key in TUPLET_MENU_ORDER:
             if key is None:
@@ -1987,10 +2194,7 @@ class BottomEditBar(QFrame):
         self.triplet_btn.clicked.connect(lambda: self.tupletActionRequested.emit("t3"))
         self.bond_btn.setEnabled(False)
         self.triplet_btn.setEnabled(False)
-        # [셈여림 — 실사용 요청] 버튼 하나 + 메뉴. 세부 항목은 메뉴 안에 두어 화면이
-        # 복잡해지지 않게 한다. 자동 인식이 가사·코드기호를 셈여림으로 오인하는 경우가
-        # 많아 "자동 인식 셈여림 모두 지우기"도 함께 둔다.
-        self.dyn_btn = flat_button("셈여림", tip="셈여림·크레셴도/디크레셴도 붙이기·지우기  (D, <, >)")
+        self.dyn_btn = flat_button("셈여림", tip=tip("dynamics", HC.tip("hairpin").replace("<qt>", "").replace("</qt>", "")))
         self.dyn_menu = QMenu(self.dyn_btn)
         self.dyn_actions = {}
         for key in DYN_MENU_ORDER:
@@ -2004,86 +2208,82 @@ class BottomEditBar(QFrame):
         self.dyn_menu.triggered.connect(lambda a: self.dynamicActionRequested.emit(a.data()))
         self.dyn_btn.setMenu(self.dyn_menu)
         self.set_dyn_context(0, False)
-        # [v1.41] 늘임표 켜기/끄기(U) — 단축키만 있어 잘못 인식된 늘임표를 지울 방법을 찾기 어려웠다
-        self.fermata_btn = flat_button("", tip="늘임표 붙이기/지우기  (U)")
+        # 표현(아티큘레이션) — 한 음에 여러 개가 함께 붙을 수 있어 콤보상자 대신 체크 표시 메뉴
+        self.expr_btn = flat_button("표현", tip=tip("expr"))
+        self.expr_menu = QMenu(self.expr_btn)
+        self.art_btns = {}                   # 내부 키 → 메뉴 항목(QAction: setEnabled·setChecked 그대로)
+        for kind, ch in (("accent", ""), ("staccato", ""), ("tenuto", ""), ("marcato", "")):
+            _sec, name, keys, _d = HC.ITEMS[kind]
+            act = QAction(f"{name}\t{keys}", self.expr_menu)
+            ic = _smufl_icon(ch, 120)
+            if ic is not None:
+                act.setIcon(ic)
+            act.setCheckable(True)
+            act.triggered.connect(lambda _=False, k=kind: self.articulationRequested.emit(k))
+            self.expr_menu.addAction(act)
+            self.art_btns[kind] = act
+        self.expr_menu.addSeparator()
+        _sec, name, keys, _d = HC.ITEMS["fermata"]
+        self.fermata_act = QAction(f"{name}\t{keys}", self.expr_menu)
         fic = _fermata_icon()
         if fic is not None:
-            self.fermata_btn.setIcon(fic)
-            self.fermata_btn.setIconSize(QSize(24, 22))
-        else:
-            self.fermata_btn.setText("늘임표")
-        self.fermata_btn.clicked.connect(self.fermataToggleRequested.emit)
-        groups.addWidget(make_chip_group("이음·잇단·셈여림",
-                                         [self.bond_btn, self.triplet_btn, self.dyn_btn]))
-        # [v2.22] 모든 버튼을 악보 기호 아이콘으로: 이음줄(뒤집은 초승달) · 셋잇단(기둥+빔+3) · p~f
-        for b, ic, wdt, isz in ((self.bond_btn, _slur_icon(), 36, QSize(24, 24)),
-                                (self.triplet_btn, _stems_beams_icon(1, True), 56, QSize(32, 26)),
-                                (self.dyn_btn, _dynamics_icon(), 72, QSize(48, 24))):
+            self.fermata_act.setIcon(fic)
+        self.fermata_act.setCheckable(True)
+        self.fermata_act.triggered.connect(lambda _=False: self.fermataToggleRequested.emit())
+        self.expr_menu.addAction(self.fermata_act)
+        self.expr_btn.setMenu(self.expr_menu)
+        grp_widgets = [self.beam_btn, self.bond_btn, self.triplet_btn, self.dyn_btn, self.expr_btn]
+        groups.addWidget(make_chip_group("묶음 · 표현", grp_widgets))
+        for b, ic, wdt, isz in ((self.beam_btn, _stems_beams_icon(2), 32, QSize(22, 20)),
+                                (self.bond_btn, _slur_icon(), 32, QSize(22, 20)),
+                                (self.triplet_btn, _stems_beams_icon(1, True), 48, QSize(26, 20)),
+                                (self.dyn_btn, _dynamics_icon(), 64, QSize(40, 20)),
+                                (self.expr_btn, _smufl_icon("", 120), 46, QSize(18, 18))):
             if ic is not None:
                 b.setText("")
                 b.setIcon(ic)
                 b.setIconSize(isz)
             b.setFixedWidth(wdt)
-        # [v2.20 아티큘레이션 칸] 음표 하나하나에 붙는 표시는 따로 모은다(MuseScore 등과 같은 구성).
-        # 고른 음표(여러 개 가능)에 붙이기/떼기 — 이미 있으면 지운다. 늘임표도 이 칸으로 옮겼다.
-        self.art_btns = {}
-        art_widgets = []
-        for kind, ch, label, key in (("accent", "\uE4A0", "악센트", "Shift+V"),
-                                     ("staccato", "\uE4A2", "스타카토", "Shift+S"),
-                                     ("tenuto", "\uE4A4", "테누토", "Shift+N"),
-                                     ("marcato", "\uE4AC", "마르카토", "Shift+O")):
-            b = flat_button("", tip=f"{label} 붙이기/지우기  ({key})")
-            ic = _smufl_icon(ch, 120)            # 아티큘레이션 글리프는 작아서 크게 그린다
-            if ic is not None:
-                b.setIcon(ic)
-            else:
-                b.setText({"accent": ">", "staccato": "·", "tenuto": "—", "marcato": "^"}[kind])
-            b.setCheckable(True)
-            b.clicked.connect(lambda _=False, k=kind: self.articulationRequested.emit(k))
-            self.art_btns[kind] = b
-            art_widgets.append(b)
-        art_widgets.append(self.fermata_btn)
-        groups.addWidget(make_chip_group("아티큘레이션", art_widgets))
-        for b in art_widgets:
-            b.setFixedWidth(36)
-            if not b.icon().isNull():
-                b.setIconSize(QSize(20, 20))
+        for b in (self.dyn_btn, self.expr_btn):
+            b.setStyleSheet(b.styleSheet() + "QPushButton { padding:2px 14px 2px 4px; }"
+                                             "QPushButton::menu-indicator { subcontrol-position: right center;"
+                                             " right:4px; width:7px; }")
 
-        note_rest_btn = flat_button("음표/쉼표", tip="음표 ↔ 쉼표 전환  (`)")
+        # ── 동작
+        note_rest_btn = flat_button("음표/쉼표", tip=tip("note_rest"))
         nri = _note_rest_icon()
-        if nri is not None:                               # [v2.21] 악보 기호 아이콘으로 통일
+        if nri is not None:
             note_rest_btn.setText("")
             note_rest_btn.setIcon(nri)
         note_rest_btn.clicked.connect(self.noteRestToggleRequested.emit)
-        delete_btn = flat_button("Del", danger=True, tip="선택 요소 삭제  (Del)")
+        delete_btn = flat_button("Del", danger=True, tip=tip("delete"))
         delete_btn.clicked.connect(self.deleteRequested.emit)
-        self.insert_btn = flat_button("뒤 삽입", tip="선택 요소 뒤에 새 음표 삽입  (Ins)")
+        self.insert_btn = flat_button("뒤 삽입", tip=tip("insert_after"))
         self.insert_btn.clicked.connect(self.insertAfterRequested.emit)
-        # [기능 추가 — 실사용 요청] Audiveris가 마디 첫 음표를 통째로
-        # 놓치는 경우(실사용 검증: 원본 데이터에 그 음 자체가 없음을
-        # 확인)가 있는데, 그동안 "뒤에 삽입"만 있어 그 자리를 채울
-        # 방법이 없었다.
-        self.insert_before_btn = flat_button("앞 삽입", tip="선택 요소 앞에 새 음표 삽입  (Shift+Ins)")
+        self.insert_before_btn = flat_button("앞 삽입", tip=tip("insert_before"))
         self.insert_before_btn.clicked.connect(self.insertBeforeRequested.emit)
-        # [v2.21] 앞꾸밈음 넣기 — 고른 음 앞에 작은 8분 꾸밈음(+이음줄). 음높이는 넣은 뒤 ↑↓
-        self.grace_btn = flat_button("꾸밈음", tip="고른 음 앞에 앞꾸밈음 넣기 — 넣은 뒤 ↑↓로 음높이  (Shift+G)")
+        self.grace_btn = flat_button("꾸밈음", tip=tip("grace_add"))
         self.grace_btn.clicked.connect(self.graceRequested.emit)
         for b, ic in ((self.insert_before_btn, _insert_icon(True)), (self.insert_btn, _insert_icon(False)),
-                      (self.grace_btn, _grace_icon())):  # (꾸밈음 아이콘은 72×64)
+                      (self.grace_btn, _grace_icon())):
             if ic is not None:
                 b.setText("")
                 b.setIcon(ic)
-        self.lyrics_btn = flat_button("가사", tip="고른 음부터 가사 흘려 넣기 — 붙여 넣은 가사를 한 음절씩 (L) · 밀기 Alt+→/←")
+        self.lyrics_btn = flat_button("가사", tip=tip("lyrics", HC.tip("lyrics_shift").replace("<qt>", "").replace("</qt>", "")))
         self.lyrics_btn.clicked.connect(self.lyricsFillRequested.emit)
         action_btns = [note_rest_btn, delete_btn, self.insert_before_btn, self.insert_btn, self.grace_btn,
                        self.lyrics_btn]
-        groups.addWidget(make_chip_group("동작", action_btns))
         for b in action_btns:
-            b.setFixedWidth(46)
+            b.setFixedWidth(38)
             if not b.icon().isNull():
-                b.setIconSize(QSize(36, 24))
+                b.setIconSize(QSize(28, 20))
+            else:
+                b.setStyleSheet(b.styleSheet() + "QPushButton { padding:2px 2px; }")
+        groups.addWidget(make_chip_group("동작", action_btns))
 
-        outer.addLayout(groups, 1)
+        outer.addStretch(1)
+        outer.addLayout(groups, 0)
+        outer.addStretch(1)
 
     # 선택 상태를 버튼(체크 표시)에 반영
     def set_dyn_context(self, n_selected: int, can_hairpin: bool):
@@ -2100,6 +2300,7 @@ class BottomEditBar(QFrame):
                 act.setEnabled(n_selected >= 1)
 
     def reflect_selection(self, element, group_base: Optional[int]):
+        self.pitch_spin.set_text(_kor_pitch(element) if element is not None and element.kind == "note" else "—")
         for base, btn in self._dur_buttons.items():
             btn.setChecked(element is not None and element.duration_base == base)
         self.dot_btn.setChecked(element is not None and bool(element.dotted))
@@ -2112,6 +2313,8 @@ class BottomEditBar(QFrame):
         """[3-B] 다중 선택: 전부 값이 같은 항목만 체크 표시(공통값 없으면
         비워 둠 — '지금 다 다르다'는 뜻이고, 버튼을 누르면 그 값으로
         통일된다)."""
+        pitches = {_kor_pitch(e) for e in elements if e.kind == "note"}
+        self.pitch_spin.set_text(next(iter(pitches)) if len(pitches) == 1 else ("여러 음" if pitches else "—"))
         bases = {e.duration_base for e in elements}
         common_base = next(iter(bases)) if len(bases) == 1 else None
         for base, btn in self._dur_buttons.items():
@@ -2139,6 +2342,10 @@ class BottomEditBar(QFrame):
                     ok = False
                     break
             b.setChecked(ok)
+        fa = getattr(self, "fermata_act", None)          # [v4.40] 늘임표도 메뉴 항목 — 모두 붙어 있으면 체크
+        if fa is not None:
+            fa.setEnabled(bool(notes))
+            fa.setChecked(bool(notes) and all(getattr(e, "fermata", False) for e in notes))
 
     def set_multi_mode(self, n: int, all_notes: bool):
         """[3-B] n>=2 면 다중 선택 모드. 여러 요소에 '공통으로' 적용
@@ -2157,10 +2364,8 @@ class BottomEditBar(QFrame):
         self.beam_btn.setEnabled(True)       # [v1.44] 여러 개 고르면 빔으로 묶기/풀기
 
     def set_selected_text(self, text: str):
-        # 칸에 맞게 줄이고(…), 전체 글은 툴팁으로
-        fm = self.selected_label.fontMetrics()
-        self.selected_label.setText(fm.elidedText(text, Qt.ElideRight, self.selected_label.maximumWidth()))
-        self.selected_label.setToolTip(text)
+        # [v4.40] 머리띠 폭에 맞게 그릴 때 줄인다(…) — 전체 글은 힌트 창으로
+        self.selected_label.setText(text)
 
     def set_signatures(self, fifths: int, beats: int, beat_type: int, ts_known: bool = True,
                        ts_symbol: str | None = None):
@@ -2183,7 +2388,7 @@ class BottomEditBar(QFrame):
         self.sig_label.setText(f"{key_name} ({acc})  ·  {ts_txt}{suffix}")
         self.sig_label.setStyleSheet(
             f"color:{'#e8a33d' if not ts_known else Tokens.ACCENT}; "
-            f"font-weight:700; font-size:14.5px;")
+            f"font-weight:700; font-size:12.5px; background:transparent;")
 
 
 # ----------------------------------------------------------------------------
@@ -2426,9 +2631,11 @@ class ScoreEditorWindow(QMainWindow):
         left_v = QVBoxLayout(left_card)
         left_v.setContentsMargins(1, 1, 1, 1)
         left_v.setSpacing(0)
-        left_v.addWidget(self._make_panel_header(
-            "원본 이미지 · 드래그 이동 / 휠 확대", QColor("#9a9aa2"), accent=False))
         self.image_panel = OriginalImagePanel()
+        # [v4.40] 붓 단추는 그림 위에 떠 있지 않고 머리띠 오른쪽 끝에
+        left_v.addWidget(self._make_panel_header(
+            "원본 이미지 · 드래그 이동 / 휠 확대", QColor("#9a9aa2"), accent=False,
+            extras=[self.image_panel.brush_btn]))
         self.image_panel.pickRequested.connect(self._pick_from_original)
         self.image_panel.brushDone.connect(self._on_brush_done)
         self.image_panel.markClicked.connect(self._on_mark_clicked)      # [v4.10]
@@ -2445,8 +2652,14 @@ class ScoreEditorWindow(QMainWindow):
         right_v = QVBoxLayout(right_card)
         right_v.setContentsMargins(1, 1, 1, 1)
         right_v.setSpacing(0)
+        self.bottom_bar = BottomEditBar()
+        # [v4.40] 조표·박자표와 고른 요소 정보는 편집 악보 머리띠에(아래 편집 칸에서는 글이 잘렸다)
+        _sep = QLabel("│")
+        _sep.setStyleSheet(f"color:{Tokens.BORDER}; background:transparent;")
         right_v.addWidget(self._make_panel_header(
-            "편집 악보 · 좌측과 동일 배율 동기화 · 클릭해 선택", QColor(Tokens.ACCENT), accent=True))
+            "편집 악보", QColor(Tokens.ACCENT), accent=True,
+            tip="왼쪽 원본과 같은 배율로 함께 움직입니다 · 음표를 클릭해 고릅니다",
+            extras=[self.bottom_bar.sig_label, _sep, self.bottom_bar.selected_label]))
         self.score_panel = ScorePanel()
         self.score_panel.contextRequested.connect(self._score_context_menu)   # [v2.41] 오른쪽 버튼 메뉴
         right_v.addWidget(self.score_panel, 1)
@@ -2454,7 +2667,6 @@ class ScoreEditorWindow(QMainWindow):
 
         root.addLayout(panels, 1)
 
-        self.bottom_bar = BottomEditBar()
         self._bottom_wrap = HScrollWrap(self.bottom_bar)
         root.addWidget(self._bottom_wrap)
 
@@ -2473,20 +2685,25 @@ class ScoreEditorWindow(QMainWindow):
             self.load_image(DEFAULT_IMAGE)
 
     # ------------------------------------------------------------------ UI
-    def _make_panel_header(self, text: str, dot_color: QColor, accent: bool) -> QWidget:
+    def _make_panel_header(self, text: str, dot_color: QColor, accent: bool, extras=None, tip: str = "") -> QWidget:
         header = QWidget()
         header.setObjectName("panelHeader")
+        header.setFixedHeight(40)            # [v4.40] 두 머리띠 높이를 같게(붓 단추·정보 글이 들어가도)
         h = QHBoxLayout(header)
-        h.setContentsMargins(18, 12, 18, 12)
+        h.setContentsMargins(18, 0, 8 if extras else 18, 0)
         h.setSpacing(8)
         dot = QLabel()
         dot.setFixedSize(6, 6)
         dot.setStyleSheet(f"background:{dot_color.name()}; border-radius:3px;")
         label = QLabel(text)
         label.setStyleSheet(f"color:{dot_color.name()}; font-weight:600; font-size:12px; background:transparent;")
+        if tip:
+            label.setToolTip(tip)
         h.addWidget(dot)
         h.addWidget(label)
         h.addStretch(1)
+        for w in extras or []:
+            h.addWidget(w, 0, Qt.AlignVCenter)
         bg = "rgba(47,111,237,0.05)" if accent else Tokens.CARD
         header.setStyleSheet(
             f"QWidget#panelHeader {{ background:{bg}; border-bottom:1px solid {Tokens.BORDER}; "
@@ -2512,6 +2729,7 @@ class ScoreEditorWindow(QMainWindow):
         self.toolbar.songInfoRequested.connect(self.on_song_info)
         self.toolbar.fitToScreenRequested.connect(self.fit_both)
         self.toolbar.aboutRequested.connect(self.on_about)
+        self.toolbar.helpRequested.connect(self.on_help)
 
     def _wire_bottom_bar(self):
         bar = self.bottom_bar
@@ -2566,6 +2784,7 @@ class ScoreEditorWindow(QMainWindow):
         sc("F3", self.on_next_error)
         sc("F", self.fit_both)
         sc("Space", self.on_play)
+        sc("F1", self.on_help)                        # [v4.40] 도움말
 
         # [Tier2] 늘임표·꾸밈음 토글, 화음 추가/제거, 보표·성부 전환.
         # 기존 단축키(1~9, ., `, A, 화살표, Delete, Insert, Ctrl+Z/T/O/E,
@@ -3219,7 +3438,7 @@ class ScoreEditorWindow(QMainWindow):
             self.score_panel.set_multi_selection([])
             self.image_panel.set_highlight(None)
             self.image_panel.set_highlight_multi([])
-            self.bottom_bar.set_selected_text("요소를 클릭하면 여기에 정보가 표시됩니다")
+            self.bottom_bar.set_selected_text("클릭해 선택")
             self.bottom_bar.reflect_selection(None, None)
             self.bottom_bar.reflect_articulations([])
             self.bottom_bar.set_multi_mode(0, False)
@@ -3232,8 +3451,8 @@ class ScoreEditorWindow(QMainWindow):
         mnum = m.number if m else "?"
         dot = ("겹점" if getattr(e, "double_dot", False) else "점") if e.dotted else ""
         if e.kind == "note":
-            pitch = f"{e.step}{_ACC.get(e.alter, '')}{e.octave}"
-            txt = f"마디 {mnum} · {dot}{_DUR_NAME.get(e.duration_base)}음표 · 음정 {pitch}"
+            pitch = f"{_kor_pitch(e)} ({e.step}{_ACC.get(e.alter, '')}{e.octave})"     # [v4.40] 계이름 먼저
+            txt = f"마디 {mnum} · {dot}{_DUR_NAME.get(e.duration_base)}음표 · {pitch}"
         else:
             txt = f"마디 {mnum} · {dot}{_DUR_NAME.get(e.duration_base)}쉼표"
         group_base = None
@@ -3836,6 +4055,10 @@ class ScoreEditorWindow(QMainWindow):
 
     # ------------------------------------------------------------- 조바꿈
     # ------------------------------------------------------- [5단계] 정보
+    def on_help(self):
+        """[v4.40] 도움말 창(F1)."""
+        HelpDialog(self).exec()
+
     def on_about(self):
         has = bool(getattr(self, "_source_path", None))
         dlg = AboutDialog(self, load_info=getattr(self, "_last_load_info", None),
@@ -5721,6 +5944,7 @@ def main():
         if os.path.exists(_icon_path):
             app.setWindowIcon(QIcon(_icon_path))
             break
+    app._flat_tip = FlatToolTip(app)                 # [v4.40] 힌트 창을 버튼 위·아래로(마우스에 가리지 않게)
     opener = _FileOpenFilter()
     app.installEventFilter(opener)
     window = ScoreEditorWindow()
