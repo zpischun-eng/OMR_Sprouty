@@ -666,6 +666,12 @@ def _env_info():
         info["java_tool_options"] = ar.jvm_env({}).get("JAVA_TOOL_OPTIONS")
     except Exception as ex:
         info["audiveris_error"] = str(ex)[:200]
+    try:                                   # [v4.30] 글자 인식 도구 유무 — PC마다 코드 이름 결과가 달라지는 까닭을 가린다
+        from omr_bridge import ocr_data
+        st = ocr_data.status()
+        info["tesseract"] = {"installed": bool(st["engine"]), "chords": st["chords"], "kor": st["kor"]}
+    except Exception:
+        pass
     return info
 
 

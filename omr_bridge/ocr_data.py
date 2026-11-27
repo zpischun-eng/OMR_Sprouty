@@ -103,3 +103,21 @@ def find_tesseract():
                 d = Path(c)
                 break
     return (exe, str(d)) if d else None
+
+
+INSTALL_URL = "https://github.com/UB-Mannheim/tesseract/wiki"     # Windows 설치판 안내(공식 문서가 가리키는 곳)
+_EXE_CANDIDATES = (r"C:\Program Files\Tesseract-OCR\tesseract.exe", "/opt/homebrew/bin/tesseract",
+                   "/usr/local/bin/tesseract", r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe")
+
+
+def status() -> dict:
+    """[v4.30] 이 PC의 글자 인식 도구 상태 — 화면 문구와 무관한 내부 값.
+    {"engine": 실행 파일 경로 또는 None, "chords": 코드 이름을 읽을 수 있나, "kor": 한국어 데이터가 있나(가사 읽기)}"""
+    import shutil
+    exe = shutil.which("tesseract") or next((c for c in _EXE_CANDIDATES if os.path.exists(c)), None)
+    kor = False
+    if exe:
+        dirs = [os.environ.get("TESSDATA_PREFIX"), str(_user_dir()), os.path.join(os.path.dirname(exe), "tessdata"),
+                "/usr/share/tesseract-ocr/5/tessdata", "/usr/share/tesseract-ocr/4.00/tessdata", "/usr/local/share/tessdata"]
+        kor = any(d and os.path.exists(os.path.join(d, "kor.traineddata")) for d in dirs)
+    return {"engine": exe, "chords": bool(exe and find_tesseract()), "kor": bool(exe and kor)}

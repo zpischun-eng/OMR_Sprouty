@@ -252,6 +252,8 @@ def build_page(doc, sheet: int = 1, carry_time=None) -> PageModel:
             if tess:
                 g_ = ik_c._gray(img, ctx.get("_upscale_factor", 1.0) or 1.0)   # 인식 좌표의 회색 그림
                 text_items = text_items + chord_ocr.find_chords(g_, score, ctx.get("staff_groups") or {}, il, tess)
+            else:
+                score.ocr_missing = True       # [v4.30] 그림 악보인데 글자 인식 도구가 없다 → 화면에서 한 줄로 알린다
         except Exception:
             import traceback
             traceback.print_exc()

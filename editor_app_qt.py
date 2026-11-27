@@ -60,7 +60,7 @@ from score import musicxml as mx
 # 오류 수정 = 소수 둘째 자리 (예: 1.00 → 1.10 → 1.11 → 2.00)
 APP_NAME = "콩나물지기"
 APP_ID = "OMR_Sprouty"
-APP_VERSION = "4.22"
+APP_VERSION = "4.30"
 _USER_MSG = "\x00USER\x00"     # [v1.21] 안내 문구만 보여줄 오류 표시(코드 추적 대신)
 
 # [화면 정리 — 실사용 요청] 편집 악보의 음표별 박수·마디 합계 숫자는 가사와 겹치기도 하고,
@@ -1263,6 +1263,55 @@ def make_segmented_toggle(title: str, options: list[str],
 # 상단 툴바 (캡슐 중앙 정렬 + 우측 통계 칩)
 # ----------------------------------------------------------------------------
 
+# [v4.30] 글자 인식 도구(Tesseract) 안내 — 내부 키(필요한 기능)와 화면 문구를 나눈다
+OCR_FEATURE_TEXT = {
+    "lyrics": "원본에서 가사 글자 읽기",
+    "chords": "그림 악보의 코드 이름 읽기",
+}
+
+
+def ocr_status_text(st: dict) -> str:
+    """ocr_data.status() → 한 줄 상태 문구."""
+    if not st.get("engine"):
+        return "없음"
+    if not st.get("kor"):
+        return "있음 (한국어 데이터 없음)"
+    return "있음"
+
+
+def show_ocr_guide(parent, feature: str = ""):
+    """글자 인식 도구가 없을 때의 설치 안내 창. feature: OCR_FEATURE_TEXT의 키(어느 기능에서 불렀나)."""
+    from omr_bridge import ocr_data
+    st = ocr_data.status()
+    what = OCR_FEATURE_TEXT.get(feature, "이 기능")
+    if st["engine"] and feature == "lyrics" and not st["kor"]:
+        head = f"'{what}'에는 Tesseract의 한국어 데이터가 필요합니다."
+        steps = ("Tesseract 설치 파일을 다시 실행해, 구성 요소 선택 화면에서\n"
+                 "Additional language data → Korean 을 체크하고 설치하세요.")
+    else:
+        head = f"'{what}'에는 글자 인식 도구(Tesseract)가 필요한데, 이 PC에는 설치되어 있지 않습니다."
+        steps = ("1. 아래 '설치 안내 열기'에서 설치 파일(tesseract-ocr-w64-setup-…exe)을 받습니다.\n"
+                 "2. 설치 위치는 기본값 그대로 둡니다 (C:\\Program Files\\Tesseract-OCR).\n"
+                 "3. 구성 요소 선택 화면에서 Additional language data → Korean 을 체크합니다.\n"
+                 f"4. 설치가 끝나면 {APP_NAME}를 껐다가 다시 켭니다.")
+    if sys.platform == "darwin" and not st["engine"]:
+        steps = ("1. 터미널을 엽니다.\n"
+                 "2. brew install tesseract tesseract-lang 을 실행합니다 (Homebrew가 필요합니다).\n"
+                 f"3. 설치가 끝나면 {APP_NAME}를 껐다가 다시 켭니다.")
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Information)
+    box.setWindowTitle("글자 인식 도구 안내")
+    box.setText(head)
+    box.setInformativeText(steps + "\n\n음표 인식·편집·재생 등 다른 기능은 이 도구 없이도 모두 쓸 수 있습니다.")
+    b_open = box.addButton("설치 안내 열기", QMessageBox.ActionRole)
+    box.addButton("닫기", QMessageBox.RejectRole)
+    box.exec()
+    if box.clickedButton() is b_open:
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+        QDesktopServices.openUrl(QUrl(ocr_data.INSTALL_URL))
+
+
 class LyricsFillDialog(QDialog):
     """[v3.10] 가사 흘려 넣기: 붙여 넣은 가사를 고른 음부터 차례로."""
 
@@ -1288,11 +1337,13 @@ class LyricsFillDialog(QDialog):
             self.verse.addItem(f"{k + 1}절" + (" (가사 있음)" if k in rows_used else ""), k)
         row.addWidget(self.verse)
         row.addStretch(1)
+        b = QPushButton("원본에서 글자 읽기")
+        b.setToolTip("원본 악보의 가사 줄을 글자 인식(Tesseract)으로 읽어 위 칸에 채웁니다 — 틀린 글자는 고쳐 주세요")
         if ocr_fn is not None:
-            b = QPushButton("원본에서 글자 읽기")
-            b.setToolTip("원본 악보의 가사 줄을 글자 인식(Tesseract)으로 읽어 위 칸에 채웁니다 — 틀린 글자는 고쳐 주세요")
             b.clicked.connect(lambda: self.text.setPlainText(ocr_fn(self.verse.currentData()) or self.text.toPlainText()))
-            row.addWidget(b)
+        else:                                   # [v4.30] 도구가 없으면 버튼을 숨기지 않고, 눌렀을 때 설치 방법을 알려 준다
+            b.clicked.connect(lambda: show_ocr_guide(self, "lyrics"))
+        row.addWidget(b)
         v.addLayout(row)
         self.skip_tied = QCheckBox("붙임줄로 이어진 음(마디를 넘는 당김음 포함)은 건너뛰기")
         self.skip_slur = QCheckBox("이음줄 안의 뒷음은 건너뛰기(한 음절을 여러 음으로 — 멜리스마)")
@@ -1356,6 +1407,19 @@ class AboutDialog(QDialog):
         v.addWidget(notice)
 
         v.addSpacing(6)
+        try:                                   # [v4.30] 글자 인식 도구 상태
+            from omr_bridge import ocr_data
+            _st = ocr_data.status()
+            ocr_row = QHBoxLayout()
+            ocr_row.addWidget(QLabel("글자 인식 도구(Tesseract): " + ocr_status_text(_st)))
+            ocr_row.addStretch(1)
+            if not (_st["engine"] and _st["kor"]):
+                bo = QPushButton("설치 방법")
+                bo.clicked.connect(lambda: show_ocr_guide(self, "lyrics" if _st["engine"] else "chords"))
+                ocr_row.addWidget(bo)
+            v.addLayout(ocr_row)
+        except Exception:
+            pass
         if load_info:
             v.addWidget(QLabel("<b>최근 불러온 악보의 인식 안내</b>"))
             info_lbl = QLabel("\n".join("· " + w for w in load_info))
@@ -2997,6 +3061,9 @@ class ScoreEditorWindow(QMainWindow):
         if info:
             self._set_status(self.status.text()
                              + f"   · 인식 안내 {len(info)}건 — '정보'에서 확인")
+        if getattr(self.score, "ocr_missing", False):  # [v4.30] 그림 악보 + 글자 인식 도구 없음 → 창 없이 한 줄만
+            self._set_status(self.status.text()
+                             + "   · 코드 이름을 읽으려면 글자 인식 도구가 필요합니다 — '정보'에서 확인")
         self._apply_pending_project()                 # [v2.50] 이어서 편집
 
     def _rerender(self):
@@ -4879,6 +4946,10 @@ class ScoreEditorWindow(QMainWindow):
                 return
             m, e, hx, hy = min(notes, key=lambda t: abs(t[2] - tcx))
             guess = self._ocr_guess(ctx, tb)
+            if not guess:
+                from omr_bridge import ocr_data
+                if not ocr_data.status()["engine"]:   # [v4.30]
+                    self._set_status("글자 인식 도구가 없어 코드 글자를 미리 읽지 못했습니다 — 직접 입력하세요 ('정보'에서 설치 방법)")
             h = self._ask_chord(guess, e)
             if h is None:
                 return
