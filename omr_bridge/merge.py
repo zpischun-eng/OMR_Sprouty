@@ -265,8 +265,12 @@ def build_ctx(omr_path: str, mxl_path: str, original_w: int, original_h: int,
             if not durations:
                 continue
             most_common_val, count = Counter(durations).most_common(1)[0]
+            # [v4.22] 박자로 흔한 길이일 때만 받는다 — 피아노 반주가 붙은 2/4 곡의 한 줄이 반주 오독 때문에
+            # 2.5박(5/8)으로 굳어, 맞게 읽힌 마디까지 '박자 부족'이 됐다(그대를 사랑해 31·32마디).
+            # 5/8·7/8처럼 드문 박자는 박자표가 인쇄되어 있으면 위의 nc 쪽으로 처리된다.
             if count >= max(2, len(durations) * 0.6) and \
-                    abs(float(most_common_val) - nc) > 0.01:
+                    abs(float(most_common_val) - nc) > 0.01 and \
+                    float(most_common_val) in (1.0, 1.5, 2.0, 3.0, 4.0, 4.5, 5.0, 6.0):
                 # 표기 박자(nc)와도 다른 값이 일관되게 인식됨 — 원래 있던
                 # "박자표 오독 의심" 케이스(이 구간 자체를 Audiveris가 다르게
                 # 읽었을 가능성). nc 오버라이드보다 우선한다.

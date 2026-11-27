@@ -60,7 +60,7 @@ from score import musicxml as mx
 # 오류 수정 = 소수 둘째 자리 (예: 1.00 → 1.10 → 1.11 → 2.00)
 APP_NAME = "콩나물지기"
 APP_ID = "OMR_Sprouty"
-APP_VERSION = "4.21"
+APP_VERSION = "4.22"
 _USER_MSG = "\x00USER\x00"     # [v1.21] 안내 문구만 보여줄 오류 표시(코드 추적 대신)
 
 # [화면 정리 — 실사용 요청] 편집 악보의 음표별 박수·마디 합계 숫자는 가사와 겹치기도 하고,
